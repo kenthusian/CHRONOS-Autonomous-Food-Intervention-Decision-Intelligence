@@ -1,0 +1,255 @@
+import {
+  FoodBatch,
+  AgentActivityEntry,
+  ActiveEvent,
+  ImpactMetric,
+  DecisionWindowPhase,
+  KPIData,
+} from '@/app/types';
+
+export const mockKPIData: KPIData = {
+  overallFoodHealth: 87,
+  atRiskBatches: 3,
+  predictedWasteAvoided: 12.4,
+  autonomousDecisions: 47,
+};
+
+export const mockFoodBatches: FoodBatch[] = [
+  {
+    id: 'batch-001',
+    name: 'Organic Tomatoes',
+    location: 'Cold Storage A-2',
+    quantity: 150,
+    quantityUnit: 'kg',
+    expiryDate: '2026-08-30',
+    daysRemaining: 5,
+    riskLevel: 'high',
+    recommendedAction: 'Promote: Feature in weekly sale',
+    lastChecked: '2026-08-25 14:32',
+  },
+  {
+    id: 'batch-002',
+    name: 'Fresh Salmon',
+    location: 'Frozen Storage B-1',
+    quantity: 45,
+    quantityUnit: 'kg',
+    expiryDate: '2026-08-29',
+    daysRemaining: 4,
+    riskLevel: 'critical',
+    recommendedAction: 'Transform: Process into ready-meals',
+    lastChecked: '2026-08-25 15:01',
+  },
+  {
+    id: 'batch-003',
+    name: 'Greek Yogurt',
+    location: 'Refrigeration C-3',
+    quantity: 280,
+    quantityUnit: 'units',
+    expiryDate: '2026-09-15',
+    daysRemaining: 21,
+    riskLevel: 'medium',
+    recommendedAction: 'Monitor: Expected demand increase',
+    lastChecked: '2026-08-25 14:15',
+  },
+  {
+    id: 'batch-004',
+    name: 'Whole Wheat Bread',
+    location: 'Shelf Storage D-4',
+    quantity: 320,
+    quantityUnit: 'loaves',
+    expiryDate: '2026-08-27',
+    daysRemaining: 2,
+    riskLevel: 'critical',
+    recommendedAction: 'Redistribute: Send to partner food bank',
+    lastChecked: '2026-08-25 15:45',
+  },
+  {
+    id: 'batch-005',
+    name: 'Organic Lettuce',
+    location: 'Fresh Produce A-1',
+    quantity: 200,
+    quantityUnit: 'heads',
+    expiryDate: '2026-08-26',
+    daysRemaining: 1,
+    riskLevel: 'critical',
+    recommendedAction: 'Transform: Prep for salad bar immediately',
+    lastChecked: '2026-08-25 16:12',
+  },
+  {
+    id: 'batch-006',
+    name: 'Cheddar Cheese',
+    location: 'Refrigeration C-2',
+    quantity: 120,
+    quantityUnit: 'kg',
+    expiryDate: '2026-09-22',
+    daysRemaining: 28,
+    riskLevel: 'low',
+    recommendedAction: 'Continue monitoring',
+    lastChecked: '2026-08-25 16:00',
+  },
+];
+
+export const mockAgentActivity: AgentActivityEntry[] = [
+  {
+    id: 'activity-001',
+    timestamp: '16:45',
+    phase: 'monitor',
+    title: 'Outcome Verified',
+    description: 'Salmon batch transformation process initiated. Cold chain maintained.',
+    batchId: 'batch-002',
+  },
+  {
+    id: 'activity-002',
+    timestamp: '16:32',
+    phase: 'decide',
+    title: 'Action Selected',
+    description:
+      'Algorithm selected "Transform" as optimal intervention. Estimated waste reduction: 98%.',
+    batchId: 'batch-002',
+  },
+  {
+    id: 'activity-003',
+    timestamp: '16:28',
+    phase: 'simulate',
+    title: 'Outcome Simulation',
+    description:
+      'Simulated 4 intervention scenarios. Transform yields highest value recovery.',
+    batchId: 'batch-002',
+  },
+  {
+    id: 'activity-004',
+    timestamp: '16:25',
+    phase: 'alternatives',
+    title: 'Alternative Generation',
+    description:
+      'Generated 4 viable intervention paths: Promote, Transform, Redistribute, Compost.',
+    batchId: 'batch-002',
+  },
+  {
+    id: 'activity-005',
+    timestamp: '16:20',
+    phase: 'risk',
+    title: 'Risk Detection',
+    description: 'Critical freshness risk identified. 4 days until expiry. High waste probability.',
+    batchId: 'batch-002',
+  },
+  {
+    id: 'activity-006',
+    timestamp: '16:15',
+    phase: 'analyze',
+    title: 'Analysis Complete',
+    description: 'Inventory health assessment: 87%. Temperature variance: +0.2°C detected.',
+    batchId: 'batch-002',
+  },
+  {
+    id: 'activity-007',
+    timestamp: '16:10',
+    phase: 'detect',
+    title: 'Event Detection',
+    description: 'Salmon batch flagged: approaching freshness threshold.',
+    batchId: 'batch-002',
+  },
+  {
+    id: 'activity-008',
+    timestamp: '16:05',
+    phase: 'observe',
+    title: 'Inventory Scan',
+    description: 'Monitoring 6 food batches across 4 storage zones. All systems nominal.',
+  },
+];
+
+export const mockActiveEvents: ActiveEvent[] = [
+  {
+    id: 'event-001',
+    type: 'temperature',
+    severity: 'high',
+    title: 'Cold Chain Variance',
+    description: 'Freezer B-1 temperature fluctuation detected: +0.8°C deviation',
+    timestamp: '2026-08-25 16:35',
+    affectedBatches: 2,
+  },
+  {
+    id: 'event-002',
+    type: 'demand',
+    severity: 'medium',
+    title: 'Demand Spike Alert',
+    description: 'Demand forecast increased 35% for dairy products next 48 hours',
+    timestamp: '2026-08-25 15:20',
+    affectedBatches: 1,
+  },
+  {
+    id: 'event-003',
+    type: 'logistics',
+    severity: 'high',
+    title: 'Delivery Delay',
+    description: 'Scheduled supplier shipment delayed 6 hours. Inventory buffer monitored.',
+    timestamp: '2026-08-25 14:45',
+    affectedBatches: 3,
+  },
+];
+
+export const mockImpactMetrics: ImpactMetric[] = [
+  {
+    label: 'Food Saved',
+    value: 847.3,
+    unit: 'kg',
+    change: 23,
+  },
+  {
+    label: 'Waste Prevented',
+    value: 92,
+    unit: '%',
+    change: 12,
+  },
+  {
+    label: 'Value Recovered',
+    value: 4230,
+    unit: '$',
+    change: 18,
+  },
+  {
+    label: 'Interventions',
+    value: 47,
+    unit: 'actions',
+    change: 7,
+  },
+];
+
+export const mockDecisionWindowPhases: DecisionWindowPhase[] = [
+  {
+    name: 'NOW',
+    timeRangeHours: 'Current',
+    isOptimal: false,
+    action: 'Monitor',
+  },
+  {
+    name: 'Monitor',
+    timeRangeHours: 'Next 12h',
+    isOptimal: false,
+    action: 'Continue observation',
+  },
+  {
+    name: 'Promote',
+    timeRangeHours: '12-24h',
+    isOptimal: true,
+    action: 'Feature in promotions',
+  },
+  {
+    name: 'Transform',
+    timeRangeHours: '24-36h',
+    isOptimal: false,
+    action: 'Process into new products',
+  },
+  {
+    name: 'Redistribute',
+    timeRangeHours: '36-48h',
+    isOptimal: false,
+    action: 'Send to partnerships',
+  },
+  {
+    name: 'Critical Risk',
+    timeRangeHours: '48h+',
+    isOptimal: false,
+    action: 'Composting required',
+  },
+];
