@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { WorldProvider, useWorldState } from './context/WorldContext';
 
 import Header from './components/Header';
@@ -11,22 +11,137 @@ import DecisionWindowTimeline from './components/DecisionWindowTimeline';
 import ActiveEvents from './components/ActiveEvents';
 import ImpactPanel from './components/ImpactPanel';
 import ScenarioSimulator from './components/ScenarioSimulator';
-import DecisionIntelligencePanel from './components/DecisionIntelligencePanel';
+import DecisionIntelligencePanel, {
+  BackendRiskAssessment,
+} from './components/DecisionIntelligencePanel';
 import DecisionHistory from './components/DecisionHistory';
 
 import { mockDecisionWindowPhases } from './data/mockData';
 import { generateDecision } from './utils/decisionEngine';
+import { Decision, WorldState } from './types';
 
 function DashboardContent() {
   const { state, selectBatch } = useWorldState();
+
+  /*
+   * Stores the latest live risk intelligence returned by FastAPI.
+   * This is kept at dashboard level so it can influence the decision
+   * rather than only being displayed inside the modal.
+   */
+  const [liveRiskAssessment, setLiveRiskAssessment] =
+    useState<BackendRiskAssessment | null>(null);
 
   const selectedBatch = state.selectedBatchId
     ? state.batches.find((b) => b.id === state.selectedBatchId)
     : null;
 
+  /*
+   * Build a temporary decision context using the live backend risk.
+   *
+   * The existing decision engine already uses WorldState and scenario
+   * conditions, so we adjust the decision context instead of duplicating
+   * the decision logic inside the UI.
+   */
+  const createLiveDecisionContext = (): WorldState => {
+    if (!liveRiskAssessment || !selectedBatch) {
+      return state;
+    }
+
+    let adjustedDemandMultiplier = state.demandMultiplier;
+
+    const backendDemandRisk =
+      liveRiskAssessment.factors.demand_risk;
+
+    // Higher backend demand risk means weaker demand.
+    if (backendDemandRisk >= 70) {
+      adjustedDemandMultiplier = Math.min(
+        adjustedDemandMultiplier,
+        0.7
+      );
+    } else if (backendDemandRisk >= 40) {
+      adjustedDemandMultiplier = Math.min(
+        adjustedDemandMultiplier,
+        0.85
+      );
+    }
+
+    return {
+      ...state,
+      demandMultiplier: adjustedDemandMultiplier,
+    };
+  };
+
+  /*
+   * Generate the base decision from the existing CHRONOS engine.
+   */
   const selectedBatchDecision = selectedBatch
-    ? generateDecision(selectedBatch, state)
+    ? generateDecision(
+        selectedBatch,
+        createLiveDecisionContext()
+      )
     : null;
+
+  /*
+   * Blend the backend AI risk score into the decision.
+   *
+   * The FastAPI model is therefore not just displayed; its risk assessment
+   * changes how confidently CHRONOS evaluates intervention urgency.
+   */
+  const applyLiveRiskToDecision = (
+    decision: Decision
+  ): Decision => {
+    if (!liveRiskAssessment) {
+      return decision;
+    }
+
+    const backendRisk =
+      Math.min(
+        100,
+        Math.max(
+          0,
+          Number(liveRiskAssessment.risk_score)
+        )
+      );
+
+    const combinedScore = Math.round(
+      decision.recommendedActionScore * 0.7 +
+        backendRisk * 0.3
+    );
+
+    return {
+      ...decision,
+      recommendedActionScore: combinedScore,
+      recommendedActionExplanation:
+        `${decision.recommendedActionExplanation} ` +
+        `Live AI assessment reports a ${liveRiskAssessment.risk_level} ` +
+        `risk level with confidence ${Number(
+          liveRiskAssessment.confidence
+        ).toFixed(1)}%.`,
+    };
+  };
+
+  const finalSelectedBatchDecision =
+    selectedBatchDecision
+      ? applyLiveRiskToDecision(selectedBatchDecision)
+      : null;
+
+  const handleLiveRiskUpdate = (
+    batchId: string,
+    assessment: BackendRiskAssessment
+  ) => {
+    // Ignore stale responses from another batch.
+    if (
+      selectedBatch &&
+      selectedBatch.id === batchId
+    ) {
+      setLiveRiskAssessment(assessment);
+    }
+  };
+
+  const handleCloseDecisionPanel = () => {
+    setLiveRiskAssessment(null);
+    selectBatch(undefined);
+  };
 
   const renderDashboard = () => (
     <div className="p-8 space-y-8">
@@ -63,7 +178,10 @@ function DashboardContent() {
   const renderInventory = () => (
     <div className="p-8 space-y-8">
       <div>
-        <h2 className="text-2xl font-bold text-white">Inventory Intelligence</h2>
+        <h2 className="text-2xl font-bold text-white">
+          Inventory Intelligence
+        </h2>
+
         <p className="text-sm text-slate-400 mt-2">
           Monitor all food batches and identify inventory at risk.
         </p>
@@ -76,7 +194,10 @@ function DashboardContent() {
   const renderAlerts = () => (
     <div className="p-8 space-y-8">
       <div>
-        <h2 className="text-2xl font-bold text-white">Active Alerts</h2>
+        <h2 className="text-2xl font-bold text-white">
+          Active Alerts
+        </h2>
+
         <p className="text-sm text-slate-400 mt-2">
           Monitor operational events requiring attention.
         </p>
@@ -91,7 +212,10 @@ function DashboardContent() {
   const renderDecisions = () => (
     <div className="p-8 space-y-8">
       <div>
-        <h2 className="text-2xl font-bold text-white">Decision Intelligence</h2>
+        <h2 className="text-2xl font-bold text-white">
+          Decision Intelligence
+        </h2>
+
         <p className="text-sm text-slate-400 mt-2">
           Review autonomous interventions and decision outcomes.
         </p>
@@ -114,7 +238,10 @@ function DashboardContent() {
   const renderSettings = () => (
     <div className="p-8 space-y-8">
       <div>
-        <h2 className="text-2xl font-bold text-white">System Settings</h2>
+        <h2 className="text-2xl font-bold text-white">
+          System Settings
+        </h2>
+
         <p className="text-sm text-slate-400 mt-2">
           Configure CHRONOS simulation and intervention parameters.
         </p>
@@ -128,29 +255,42 @@ function DashboardContent() {
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-slate-700 pb-4">
             <div>
-              <p className="font-medium text-white">Autonomous Decisions</p>
+              <p className="font-medium text-white">
+                Autonomous Decisions
+              </p>
+
               <p className="text-sm text-slate-400">
                 Allow CHRONOS to generate intervention recommendations.
               </p>
             </div>
 
-            <span className="text-green-400 font-medium">Active</span>
+            <span className="text-green-400 font-medium">
+              Active
+            </span>
           </div>
 
           <div className="flex items-center justify-between border-b border-slate-700 pb-4">
             <div>
-              <p className="font-medium text-white">Risk Monitoring</p>
+              <p className="font-medium text-white">
+                Risk Monitoring
+              </p>
+
               <p className="text-sm text-slate-400">
                 Continuously evaluate inventory freshness and demand.
               </p>
             </div>
 
-            <span className="text-green-400 font-medium">Enabled</span>
+            <span className="text-green-400 font-medium">
+              Enabled
+            </span>
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium text-white">Current Scenario</p>
+              <p className="font-medium text-white">
+                Current Scenario
+              </p>
+
               <p className="text-sm text-slate-400">
                 Active simulation environment.
               </p>
@@ -192,24 +332,23 @@ function DashboardContent() {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
         <Header
           kpiData={state.kpis}
           currentScenario={state.currentScenario}
         />
 
-        {/* Scrollable Page Content */}
         <main className="flex-1 overflow-y-auto">
           {renderCurrentView()}
         </main>
       </div>
 
       {/* Decision Intelligence Modal */}
-      {selectedBatch && selectedBatchDecision && (
+      {selectedBatch && finalSelectedBatchDecision && (
         <DecisionIntelligencePanel
           batch={selectedBatch}
-          decision={selectedBatchDecision}
-          onClose={() => selectBatch(undefined)}
+          decision={finalSelectedBatchDecision}
+          onClose={handleCloseDecisionPanel}
+          onLiveRiskUpdate={handleLiveRiskUpdate}
         />
       )}
     </div>
