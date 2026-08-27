@@ -2,37 +2,21 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  X,
-  Brain,
-  RefreshCw,
-  CheckCircle2,
   AlertTriangle,
-  TrendingUp,
-  Clock,
-  Zap,
+  ArrowUpRight,
+  Brain,
+  CheckCircle2,
+  Loader2,
+  RefreshCw,
+  X,
 } from 'lucide-react';
 
+import { FoodBatch, Decision } from '@/app/types';
 import {
-  FoodBatch,
-  Decision,
-  DecisionAlternative,
-} from '@/app/types';
-
-import AgentDecisionPipeline from './AgentDecisionPipeline';
-
-export interface BackendRiskAssessment {
-  product_name: string;
-  risk_score: number;
-  risk_level: string;
-  confidence: number;
-  factors: {
-    expiry_risk: number;
-    temperature_risk: number;
-    demand_risk: number;
-    logistics_risk: number;
-  };
-  recommended_action: string;
-}
+  predictRisk,
+  BackendRiskAssessment,
+  RiskRequest,
+} from '@/app/utils/api';
 
 interface DecisionIntelligencePanelProps {
   batch: FoodBatch;
@@ -44,32 +28,12 @@ interface DecisionIntelligencePanelProps {
   ) => void;
 }
 
-const getRiskColor = (riskLevel: string) => {
-  switch (riskLevel.toLowerCase()) {
-    case 'low':
-      return 'text-emerald-400';
-    case 'medium':
-      return 'text-yellow-400';
-    case 'high':
-      return 'text-orange-400';
-    case 'critical':
-      return 'text-red-400';
-    default:
-      return 'text-slate-300';
-  }
+const getTemperatureAnomaly = (batch: FoodBatch): number => {
+  return batch.temperatureDeviation ?? 0;
 };
 
-const getOperationalRiskColor = (riskLevel: string) => {
-  switch (riskLevel) {
-    case 'low':
-      return 'text-emerald-400';
-    case 'medium':
-      return 'text-yellow-400';
-    case 'high':
-      return 'text-red-400';
-    default:
-      return 'text-slate-300';
-  }
+const getLogisticsDelay = (batch: FoodBatch): number => {
+  return batch.logisticsDelayHours ?? 0;
 };
 
 export default function DecisionIntelligencePanel({
@@ -78,302 +42,340 @@ export default function DecisionIntelligencePanel({
   onClose,
   onLiveRiskUpdate,
 }: DecisionIntelligencePanelProps) {
-  const [backendAssessment, setBackendAssessment] =
+  const [assessment, setAssessment] =
     useState<BackendRiskAssessment | null>(null);
 
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchRiskAssessment = async () => {
-    setIsLoading(true);
-    setError(null);
-
+  const loadRiskAssessment = async () => {
     try {
-      const response = await fetch(
-        'http://127.0.0.1:8000/predict-risk',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+      setLoading(true);
+      setError(null);
 
-          body: JSON.stringify({
-            product_name: batch.name,
-            days_remaining: batch.daysRemaining,
-            temperature_anomaly: 0,
-            demand_multiplier: 1,
-            logistics_delay_hours: 0,
-            quantity_kg: batch.quantity,
-          }),
-        }
-      );
+      const request: RiskRequest = {
+        product_name: batch.name,
+        days_remaining: batch.daysRemaining,
+        quantity_kg:
+          batch.quantityUnit.toLowerCase() === 'kg'
+            ? batch.quantity
+            : batch.quantity,
+        demand_multiplier: 1,
+        temperature_anomaly: getTemperatureAnomaly(batch),
+        logistics_delay_hours: getLogisticsDelay(batch),
+      };
 
-      if (!response.ok) {
-        throw new Error(
-          'Unable to connect to the CHRONOS AI backend.'
-        );
-      }
+      const result = await predictRisk(request);
 
-      const data: BackendRiskAssessment = await response.json();
+      setAssessment(result);
 
-      setBackendAssessment(data);
-
-      // Send the live backend intelligence back to the dashboard.
-      // The dashboard can then regenerate the decision using this risk.
       if (onLiveRiskUpdate) {
-        onLiveRiskUpdate(batch.id, data);
+        onLiveRiskUpdate(batch.id, result);
       }
     } catch (err) {
-      console.error(
-        'Backend risk assessment error:',
-        err
-      );
+      console.error('Failed to load AI risk assessment:', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to retrieve the live AI risk assessment.'
+        'Unable to connect to the CHRONOS AI backend. Make sure FastAPI is running on port 8000.'
       );
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchRiskAssessment();
+    loadRiskAssessment();
   }, [batch.id]);
 
-  const recommendedAlternative =
-    decision.alternatives.find(
-      (alternative) =>
-        alternative.id === decision.selectedAlternativeId
-    ) || decision.alternatives[0];
+  const backendRiskFactors = assessment
+    ? [
+        {
+          name: 'Expiry',
+          value: assessment.factors.expiry_risk,
+        },
+        {
+          name: 'Temperature',
+          value: assessment.factors.temperature_risk,
+        },
+        {
+          name: 'Demand',
+          value: assessment.factors.demand_risk,
+        },
+        {
+          name: 'Logistics',
+          value: assessment.factors.logistics_risk,
+        },
+      ]
+    : [];
+
+  /*
+   * This section is important:
+   *
+   * When the backend assessment is available, CHRONOS displays
+   * the actual risk factors calculated by FastAPI.
+   *
+   * If the backend is unavailable, the application falls back
+   * to the existing frontend decision engine.
+   */
+  const displayRiskFactors = assessment
+    ? [
+        {
+          name: 'Freshness Risk',
+          score: assessment.factors.expiry_risk,
+          description: `${batch.daysRemaining} days remaining. Shelf-life risk calculated by the live CHRONOS AI backend.`,
+        },
+        {
+          name: 'Demand Risk',
+          score: assessment.factors.demand_risk,
+          description:
+            'Demand conditions evaluated using the current inventory demand signal.',
+        },
+        {
+          name: 'Temperature Risk',
+          score: assessment.factors.temperature_risk,
+          description:
+            'Temperature anomaly impact evaluated by the live AI risk model.',
+        },
+        {
+          name: 'Logistics Risk',
+          score: assessment.factors.logistics_risk,
+          description:
+            'Logistics delays and operational impact evaluated by the AI backend.',
+        },
+      ]
+    : decision.riskFactors;
+
+  /*
+   * Backend recommendation has priority.
+   * If the API is unavailable, fall back to the local decision engine.
+   */
+  const recommendation =
+    assessment?.recommended_action ??
+    decision.recommendedActionName;
+
+  /*
+   * IMPORTANT:
+   * risk_score represents inventory risk.
+   * It should not be incorrectly displayed as the recommendation score.
+   */
+  const recommendationScore = decision.recommendedActionScore;
+
+  const recommendationExplanation = assessment
+    ? `CHRONOS selected ${assessment.recommended_action} after evaluating live expiry, demand, temperature, and logistics signals through the AI risk assessment service.`
+    : decision.recommendedActionExplanation;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex justify-end">
-      <div className="h-full w-full max-w-6xl bg-slate-900 border-l border-slate-700 overflow-y-auto">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80">
+      <div className="min-h-screen bg-slate-950">
         {/* Header */}
-        <div className="sticky top-0 z-10 bg-slate-900 border-b border-slate-700 px-8 py-6 flex items-start justify-between">
+        <div className="flex items-start justify-between border-b border-slate-700 px-8 py-6">
           <div>
             <h2 className="text-3xl font-bold text-white">
               Decision Intelligence
             </h2>
 
-            <p className="text-slate-400 mt-1">
+            <p className="mt-2 text-lg text-slate-400">
               Analyzing: {batch.name}
             </p>
           </div>
 
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white transition-colors p-2"
-            aria-label="Close decision panel"
+            className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white"
           >
-            <X size={30} />
+            <X size={32} />
           </button>
         </div>
 
-        <div className="p-8 space-y-8">
+        <div className="space-y-8 p-8">
+          {/* Loading */}
+          {loading && (
+            <div className="flex items-center justify-center gap-3 rounded-xl border border-blue-800 bg-blue-950/30 p-8">
+              <Loader2
+                className="animate-spin text-blue-400"
+                size={28}
+              />
 
-          {/* LIVE BACKEND AI ASSESSMENT */}
-          <section className="border border-blue-600 rounded-xl bg-slate-800/70 p-8">
-            <div className="flex items-start justify-between gap-6 mb-8">
-              <div className="flex items-start gap-4">
-                <div className="p-3 rounded-xl bg-blue-500/20">
-                  <Brain
-                    className="text-blue-400"
-                    size={30}
-                  />
+              <span className="text-slate-300">
+                CHRONOS AI is analyzing the current inventory state...
+              </span>
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="rounded-xl border border-red-800 bg-red-950/30 p-6">
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-red-300">{error}</p>
+
+                <button
+                  onClick={loadRiskAssessment}
+                  className="rounded-lg bg-red-900/40 px-4 py-2 text-sm font-medium text-red-200 hover:bg-red-900/70"
+                >
+                  Retry Connection
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Live AI Assessment */}
+          {assessment && (
+            <div className="rounded-xl border border-blue-600 bg-slate-900 p-8">
+              <div className="mb-6 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="rounded-xl bg-blue-950 p-3">
+                    <Brain
+                      size={28}
+                      className="text-blue-400"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-2xl font-bold text-white">
+                        Live AI Risk Assessment
+                      </h3>
+
+                      <span className="rounded-full bg-green-900/60 px-3 py-1 text-sm font-medium text-green-300">
+                        FASTAPI CONNECTED
+                      </span>
+                    </div>
+
+                    <p className="mt-2 text-slate-400">
+                      Real-time backend intelligence informing the CHRONOS
+                      decision engine.
+                    </p>
+                  </div>
                 </div>
 
-                <div>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <h3 className="text-2xl font-bold text-white">
-                      Live AI Risk Assessment
+                <button
+                  onClick={loadRiskAssessment}
+                  className="rounded-lg bg-slate-800 p-3 text-slate-300 transition hover:bg-slate-700"
+                  title="Refresh AI assessment"
+                >
+                  <RefreshCw size={22} />
+                </button>
+              </div>
+
+              {/* Main Backend Metrics */}
+              <div className="grid gap-5 md:grid-cols-3">
+                <div className="rounded-xl bg-slate-800 p-6">
+                  <p className="text-sm uppercase tracking-wider text-slate-400">
+                    Live Risk Score
+                  </p>
+
+                  <p className="mt-3 text-4xl font-bold text-green-400">
+                    {Number.isFinite(assessment.risk_score)
+                      ? assessment.risk_score.toFixed(1)
+                      : 'N/A'}
+                  </p>
+                </div>
+
+                <div className="rounded-xl bg-slate-800 p-6">
+                  <p className="text-sm uppercase tracking-wider text-slate-400">
+                    Risk Level
+                  </p>
+
+                  <p className="mt-3 text-2xl font-bold capitalize text-green-400">
+                    {assessment.risk_level}
+                  </p>
+                </div>
+
+                <div className="rounded-xl bg-slate-800 p-6">
+                  <p className="text-sm uppercase tracking-wider text-slate-400">
+                    Model Confidence
+                  </p>
+
+                  <p className="mt-3 text-4xl font-bold text-blue-400">
+                    {Number.isFinite(Number(assessment.confidence))
+                      ? Number(assessment.confidence).toFixed(1)
+                      : '0.0'}
+                    %
+                  </p>
+                </div>
+              </div>
+
+              {/* Backend Recommendation */}
+              <div className="mt-6 rounded-xl border border-blue-700 bg-blue-950/30 p-6">
+                <p className="text-sm font-semibold uppercase tracking-wider text-blue-300">
+                  Backend Recommendation
+                </p>
+
+                <p className="mt-3 text-2xl font-bold text-white">
+                  {assessment.recommended_action}
+                </p>
+              </div>
+
+              {/* Backend Risk Factors */}
+              <div className="mt-6">
+                <p className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-400">
+                  Backend Risk Factors
+                </p>
+
+                <div className="grid gap-4 md:grid-cols-4">
+                  {backendRiskFactors.map((factor) => (
+                    <div
+                      key={factor.name}
+                      className="rounded-xl bg-slate-800 p-5"
+                    >
+                      <p className="text-slate-400">
+                        {factor.name}
+                      </p>
+
+                      <p className="mt-3 text-2xl font-bold text-white">
+                        {Number.isFinite(Number(factor.value))
+                          ? Number(factor.value).toFixed(0)
+                          : '0'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Final CHRONOS Recommendation */}
+          {!loading && (
+            <div className="rounded-xl border border-green-700 bg-green-950/30 p-8">
+              <div className="flex items-center justify-between gap-8">
+                <div className="flex items-start gap-4">
+                  <CheckCircle2
+                    size={36}
+                    className="mt-1 text-green-400"
+                  />
+
+                  <div>
+                    <h3 className="text-3xl font-bold text-white">
+                      {recommendation}
                     </h3>
 
-                    <span className="px-3 py-1 rounded-full bg-emerald-900/70 text-emerald-300 text-sm font-medium">
-                      FASTAPI CONNECTED
-                    </span>
-                  </div>
-
-                  <p className="text-slate-400 mt-2">
-                    Live backend intelligence is being used
-                    to inform the CHRONOS decision workflow.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={fetchRiskAssessment}
-                disabled={isLoading}
-                className="p-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors disabled:opacity-50"
-                title="Refresh AI assessment"
-              >
-                <RefreshCw
-                  size={22}
-                  className={
-                    isLoading ? 'animate-spin' : ''
-                  }
-                />
-              </button>
-            </div>
-
-            {isLoading && (
-              <div className="py-10 text-center text-slate-400">
-                Connecting to CHRONOS AI backend...
-              </div>
-            )}
-
-            {error && (
-              <div className="border border-red-700 bg-red-950/40 rounded-lg p-5 text-red-300">
-                <div className="flex items-center gap-3">
-                  <AlertTriangle size={22} />
-                  <span>{error}</span>
-                </div>
-              </div>
-            )}
-
-            {!isLoading && backendAssessment && (
-              <>
-                {/* Main AI Metrics */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-                  <div className="bg-slate-700/70 rounded-xl p-5">
-                    <p className="text-sm uppercase tracking-wider text-slate-400">
-                      Live Risk Score
-                    </p>
-
-                    <p className="text-4xl font-bold text-emerald-400 mt-3">
-                      {backendAssessment.risk_score}
-                    </p>
-                  </div>
-
-                  <div className="bg-slate-700/70 rounded-xl p-5">
-                    <p className="text-sm uppercase tracking-wider text-slate-400">
-                      Risk Level
-                    </p>
-
-                    <p
-                      className={`text-2xl font-bold mt-4 ${getRiskColor(
-                        backendAssessment.risk_level
-                      )}`}
-                    >
-                      {backendAssessment.risk_level}
-                    </p>
-                  </div>
-
-                  <div className="bg-slate-700/70 rounded-xl p-5">
-                    <p className="text-sm uppercase tracking-wider text-slate-400">
-                      Model Confidence
-                    </p>
-
-                    <p className="text-3xl font-bold text-blue-400 mt-3">
-                      {Number(
-                        backendAssessment.confidence
-                      ).toFixed(2)}
-                      %
+                    <p className="mt-4 max-w-3xl text-lg text-slate-300">
+                      {recommendationExplanation}
                     </p>
                   </div>
                 </div>
 
-                {/* Backend Recommendation */}
-                <div className="border border-blue-600/70 bg-blue-950/30 rounded-xl p-5 mb-6">
-                  <p className="text-sm uppercase tracking-wider font-semibold text-blue-300 mb-2">
-                    Backend Recommendation
+                <div className="text-right">
+                  <p className="text-sm uppercase tracking-wider text-green-300">
+                    Recommendation Score
                   </p>
 
-                  <p className="text-lg font-medium text-white">
-                    {backendAssessment.recommended_action}
-                  </p>
-                </div>
-
-                {/* Backend Risk Factors */}
-                <div>
-                  <p className="text-sm uppercase tracking-wider text-slate-400 mb-4">
-                    Backend Risk Factors
-                  </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <RiskFactorCard
-                      label="Expiry"
-                      value={
-                        backendAssessment.factors.expiry_risk
-                      }
-                    />
-
-                    <RiskFactorCard
-                      label="Temperature"
-                      value={
-                        backendAssessment.factors.temperature_risk
-                      }
-                    />
-
-                    <RiskFactorCard
-                      label="Demand"
-                      value={
-                        backendAssessment.factors.demand_risk
-                      }
-                    />
-
-                    <RiskFactorCard
-                      label="Logistics"
-                      value={
-                        backendAssessment.factors.logistics_risk
-                      }
-                    />
-                  </div>
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* AUTONOMOUS AGENT PIPELINE */}
-          <section>
-            <AgentDecisionPipeline
-              decision={decision}
-            />
-          </section>
-
-          {/* CHRONOS RECOMMENDATION */}
-          <section className="rounded-xl border border-emerald-600/60 bg-emerald-950/50 p-8">
-            <div className="flex items-start justify-between gap-6">
-              <div className="flex gap-4">
-                <CheckCircle2
-                  className="text-emerald-400 mt-1"
-                  size={32}
-                />
-
-                <div>
-                  <h3 className="text-2xl font-bold text-white">
-                    {recommendedAlternative?.name ||
-                      decision.recommendedActionName}
-                  </h3>
-
-                  <p className="text-slate-300 mt-4 leading-relaxed">
-                    {recommendedAlternative?.explanation ||
-                      decision.recommendedActionExplanation}
+                  <p className="mt-3 text-4xl font-bold text-green-300">
+                    {Number.isFinite(recommendationScore)
+                      ? Number(recommendationScore).toFixed(1)
+                      : 'N/A'}
                   </p>
                 </div>
-              </div>
-
-              <div className="text-right">
-                <p className="text-xs uppercase tracking-wider text-emerald-300">
-                  Recommendation Score
-                </p>
-
-                <p className="text-4xl font-bold text-emerald-300 mt-2">
-                  {decision.recommendedActionScore}
-                </p>
               </div>
             </div>
-          </section>
+          )}
 
-          {/* KEY RISK FACTORS */}
-          <section className="rounded-xl border border-slate-700 bg-slate-800 p-8">
-            <div className="flex items-center gap-3 mb-6">
+          {/* Key Risk Factors */}
+          <div className="rounded-xl border border-slate-700 bg-slate-900 p-8">
+            <div className="mb-6 flex items-center gap-3">
               <AlertTriangle
+                size={30}
                 className="text-orange-400"
-                size={28}
               />
 
               <h3 className="text-2xl font-bold text-white">
@@ -382,49 +384,49 @@ export default function DecisionIntelligencePanel({
             </div>
 
             <div className="space-y-6">
-              {decision.riskFactors.map((factor) => (
-                <div
-                  key={factor.name}
-                  className="grid grid-cols-[1fr_auto] gap-6 items-center"
-                >
-                  <div>
-                    <h4 className="font-semibold text-white">
-                      {factor.name}
-                    </h4>
+              {displayRiskFactors.map((factor) => {
+                const numericScore = Number(factor.score);
 
-                    <p className="text-slate-400 text-sm mt-1">
-                      {factor.description}
-                    </p>
-                  </div>
+                const safeScore = Number.isFinite(numericScore)
+                  ? Math.max(0, Math.min(100, numericScore))
+                  : 0;
 
-                  <div className="flex items-center gap-4 min-w-56">
-                    <div className="h-3 flex-1 bg-slate-700 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-400 rounded-full"
-                        style={{
-                          width: `${Math.min(
-                            factor.score,
-                            100
-                          )}%`,
-                        }}
-                      />
+                return (
+                  <div key={factor.name}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-semibold text-white">
+                          {factor.name}
+                        </h4>
+
+                        <p className="mt-1 text-sm text-slate-400">
+                          {factor.description}
+                        </p>
+                      </div>
+
+                      <span className="text-lg font-bold text-white">
+                        {safeScore.toFixed(0)}
+                      </span>
                     </div>
 
-                    <span className="w-8 text-right font-bold text-white">
-                      {factor.score}
-                    </span>
+                    <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-700">
+                      <div
+                        className="h-full rounded-full bg-green-500 transition-all duration-500"
+                        style={{ width: `${safeScore}%` }}
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
-          </section>
+          </div>
 
-          {/* ACTION ALTERNATIVES */}
-          <section className="rounded-xl border border-slate-700 bg-slate-800 p-8">
-            <div className="flex items-center gap-3 mb-6">
-              <TrendingUp
+          {/* Action Alternatives */}
+          <div className="rounded-xl border border-slate-700 bg-slate-900 p-8">
+            <div className="mb-6 flex items-center gap-3">
+              <ArrowUpRight
+                size={30}
                 className="text-blue-400"
-                size={28}
               />
 
               <h3 className="text-2xl font-bold text-white">
@@ -433,140 +435,58 @@ export default function DecisionIntelligencePanel({
             </div>
 
             <div className="space-y-4">
-              {decision.alternatives.map(
-                (alternative: DecisionAlternative) => {
-                  const isRecommended =
-                    alternative.id ===
-                    recommendedAlternative?.id;
+              {decision.alternatives.map((alternative) => (
+                <div
+                  key={alternative.id}
+                  className="rounded-xl border border-slate-700 bg-slate-800 p-6 transition hover:border-blue-700"
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-xl font-bold text-white">
+                        {alternative.name}
+                      </h4>
 
-                  return (
-                    <div
-                      key={alternative.id}
-                      className={`rounded-xl border p-5 transition-colors ${
-                        isRecommended
-                          ? 'border-blue-500 bg-blue-950/40'
-                          : 'border-slate-600 bg-slate-800'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-6">
-                        <div>
-                          <h4 className="text-xl font-bold text-white">
-                            {alternative.name}
-                          </h4>
+                      <p className="mt-2 text-slate-400">
+                        {alternative.description}
+                      </p>
 
-                          <p className="text-slate-400 mt-2">
-                            {alternative.description}
-                          </p>
+                      <div className="mt-4 flex flex-wrap gap-6 text-sm">
+                        <span className="text-slate-400">
+                          Waste reduction:{' '}
+                          <span className="font-semibold text-white">
+                            {alternative.wasteReductionPercent}%
+                          </span>
+                        </span>
 
-                          <div className="flex gap-5 mt-4 text-sm">
-                            <span className="text-slate-400">
-                              Waste reduction:{' '}
-                              <strong className="text-white">
-                                {
-                                  alternative.wasteReductionPercent
-                                }
-                                %
-                              </strong>
-                            </span>
-
-                            <span className="text-slate-400">
-                              Operational risk:{' '}
-                              <strong
-                                className={getOperationalRiskColor(
-                                  alternative.operationalRiskLevel
-                                )}
-                              >
-                                {
-                                  alternative.operationalRiskLevel
-                                }
-                              </strong>
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="text-right">
-                          <p className="text-xs uppercase tracking-wider text-slate-400">
-                            Score
-                          </p>
-
-                          <p className="text-3xl font-bold text-white mt-1">
-                            {alternative.overallScore}
-                          </p>
-                        </div>
+                        <span className="text-slate-400">
+                          Operational risk:{' '}
+                          <span className="font-semibold text-green-400">
+                            {alternative.operationalRiskLevel}
+                          </span>
+                        </span>
                       </div>
                     </div>
-                  );
-                }
-              )}
-            </div>
-          </section>
 
-          {/* DECISION STATUS */}
-          <section className="rounded-xl border border-slate-700 bg-slate-800 p-6">
-            <div className="flex flex-wrap gap-8">
-              <div className="flex items-center gap-3">
-                <Zap
-                  className="text-yellow-400"
-                  size={22}
-                />
+                    <div className="ml-6 text-right">
+                      <p className="text-xs uppercase tracking-wider text-slate-400">
+                        Score
+                      </p>
 
-                <div>
-                  <p className="text-xs text-slate-400 uppercase">
-                    Execution Mode
-                  </p>
-
-                  <p className="text-white font-semibold capitalize">
-                    {decision.executionMode.replace(
-                      '-',
-                      ' '
-                    )}
-                  </p>
+                      <p className="mt-2 text-3xl font-bold text-white">
+                        {Number.isFinite(
+                          Number(alternative.overallScore)
+                        )
+                          ? Number(alternative.overallScore).toFixed(1)
+                          : 'N/A'}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <Clock
-                  className="text-blue-400"
-                  size={22}
-                />
-
-                <div>
-                  <p className="text-xs text-slate-400 uppercase">
-                    Decision Status
-                  </p>
-
-                  <p className="text-white font-semibold capitalize">
-                    {decision.status}
-                  </p>
-                </div>
-              </div>
+              ))}
             </div>
-          </section>
-
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-interface RiskFactorCardProps {
-  label: string;
-  value: number;
-}
-
-function RiskFactorCard({
-  label,
-  value,
-}: RiskFactorCardProps) {
-  return (
-    <div className="bg-slate-700/70 rounded-xl p-4">
-      <p className="text-sm text-slate-400">
-        {label}
-      </p>
-
-      <p className="text-2xl font-bold text-white mt-2">
-        {value}
-      </p>
     </div>
   );
 }

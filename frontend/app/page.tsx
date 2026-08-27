@@ -18,134 +18,43 @@ import DecisionHistory from './components/DecisionHistory';
 
 import { mockDecisionWindowPhases } from './data/mockData';
 import { generateDecision } from './utils/decisionEngine';
-import { Decision, WorldState } from './types';
 
 function DashboardContent() {
   const { state, selectBatch } = useWorldState();
 
-  /*
-   * Stores the latest live risk intelligence returned by FastAPI.
-   * This is kept at dashboard level so it can influence the decision
-   * rather than only being displayed inside the modal.
-   */
-  const [liveRiskAssessment, setLiveRiskAssessment] =
-    useState<BackendRiskAssessment | null>(null);
+  // Store the COMPLETE backend AI assessment for every batch.
+  const [liveAssessments, setLiveAssessments] = useState<
+    Record<string, BackendRiskAssessment>
+  >({});
 
   const selectedBatch = state.selectedBatchId
-    ? state.batches.find((b) => b.id === state.selectedBatchId)
-    : null;
-
-  /*
-   * Build a temporary decision context using the live backend risk.
-   *
-   * The existing decision engine already uses WorldState and scenario
-   * conditions, so we adjust the decision context instead of duplicating
-   * the decision logic inside the UI.
-   */
-  const createLiveDecisionContext = (): WorldState => {
-    if (!liveRiskAssessment || !selectedBatch) {
-      return state;
-    }
-
-    let adjustedDemandMultiplier = state.demandMultiplier;
-
-    const backendDemandRisk =
-      liveRiskAssessment.factors.demand_risk;
-
-    // Higher backend demand risk means weaker demand.
-    if (backendDemandRisk >= 70) {
-      adjustedDemandMultiplier = Math.min(
-        adjustedDemandMultiplier,
-        0.7
-      );
-    } else if (backendDemandRisk >= 40) {
-      adjustedDemandMultiplier = Math.min(
-        adjustedDemandMultiplier,
-        0.85
-      );
-    }
-
-    return {
-      ...state,
-      demandMultiplier: adjustedDemandMultiplier,
-    };
-  };
-
-  /*
-   * Generate the base decision from the existing CHRONOS engine.
-   */
-  const selectedBatchDecision = selectedBatch
-    ? generateDecision(
-        selectedBatch,
-        createLiveDecisionContext()
+    ? state.batches.find(
+        (batch) => batch.id === state.selectedBatchId
       )
     : null;
 
-  /*
-   * Blend the backend AI risk score into the decision.
-   *
-   * The FastAPI model is therefore not just displayed; its risk assessment
-   * changes how confidently CHRONOS evaluates intervention urgency.
-   */
-  const applyLiveRiskToDecision = (
-    decision: Decision
-  ): Decision => {
-    if (!liveRiskAssessment) {
-      return decision;
-    }
+  // Generate the decision using the complete AI backend intelligence.
+  const selectedBatchDecision = selectedBatch
+    ? generateDecision(
+        selectedBatch,
+        state,
+        liveAssessments[selectedBatch.id] || null
+      )
+    : null;
 
-    const backendRisk =
-      Math.min(
-        100,
-        Math.max(
-          0,
-          Number(liveRiskAssessment.risk_score)
-        )
-      );
-
-    const combinedScore = Math.round(
-      decision.recommendedActionScore * 0.7 +
-        backendRisk * 0.3
-    );
-
-    return {
-      ...decision,
-      recommendedActionScore: combinedScore,
-      recommendedActionExplanation:
-        `${decision.recommendedActionExplanation} ` +
-        `Live AI assessment reports a ${liveRiskAssessment.risk_level} ` +
-        `risk level with confidence ${Number(
-          liveRiskAssessment.confidence
-        ).toFixed(1)}%.`,
-    };
-  };
-
-  const finalSelectedBatchDecision =
-    selectedBatchDecision
-      ? applyLiveRiskToDecision(selectedBatchDecision)
-      : null;
-
+  // Receive complete live AI intelligence from FastAPI.
   const handleLiveRiskUpdate = (
     batchId: string,
     assessment: BackendRiskAssessment
   ) => {
-    // Ignore stale responses from another batch.
-    if (
-      selectedBatch &&
-      selectedBatch.id === batchId
-    ) {
-      setLiveRiskAssessment(assessment);
-    }
-  };
-
-  const handleCloseDecisionPanel = () => {
-    setLiveRiskAssessment(null);
-    selectBatch(undefined);
+    setLiveAssessments((previousAssessments) => ({
+      ...previousAssessments,
+      [batchId]: assessment,
+    }));
   };
 
   const renderDashboard = () => (
     <div className="p-8 space-y-8">
-      {/* Inventory and Agent Activity */}
       <div className="grid grid-cols-3 gap-8">
         <div className="col-span-2">
           <InventoryRiskOverview batches={state.batches} />
@@ -156,19 +65,15 @@ function DashboardContent() {
         </div>
       </div>
 
-      {/* Decision Timeline */}
       <DecisionWindowTimeline phases={mockDecisionWindowPhases} />
 
-      {/* Events and Impact */}
       <div className="grid grid-cols-2 gap-8">
         <ActiveEvents events={state.events} />
         <ImpactPanel metrics={state.impactMetrics} />
       </div>
 
-      {/* Scenario Simulator */}
       <ScenarioSimulator />
 
-      {/* Decision History */}
       {state.decisionHistory.length > 0 && (
         <DecisionHistory history={state.decisionHistory} />
       )}
@@ -327,10 +232,8 @@ function DashboardContent() {
 
   return (
     <div className="flex h-screen bg-slate-950">
-      {/* Sidebar */}
       <Sidebar />
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header
           kpiData={state.kpis}
@@ -342,12 +245,11 @@ function DashboardContent() {
         </main>
       </div>
 
-      {/* Decision Intelligence Modal */}
-      {selectedBatch && finalSelectedBatchDecision && (
+      {selectedBatch && selectedBatchDecision && (
         <DecisionIntelligencePanel
           batch={selectedBatch}
-          decision={finalSelectedBatchDecision}
-          onClose={handleCloseDecisionPanel}
+          decision={selectedBatchDecision}
+          onClose={() => selectBatch(undefined)}
           onLiveRiskUpdate={handleLiveRiskUpdate}
         />
       )}

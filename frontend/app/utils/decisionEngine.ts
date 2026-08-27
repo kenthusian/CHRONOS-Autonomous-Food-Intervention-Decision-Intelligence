@@ -9,35 +9,28 @@ import {
 import { calculateBatchRisk } from './riskEngine';
 
 /**
- * Live risk assessment returned by the CHRONOS FastAPI backend.
- * The backend assessment is optional so the decision engine can
- * still operate using the local simulation model as a fallback.
+ * Live intelligence received from the FastAPI AI backend.
  */
-export interface LiveRiskAssessment {
-  product_name: string;
+export interface LiveRiskInput {
   risk_score: number;
-  risk_level: 'low' | 'medium' | 'high' | 'critical' | string;
+  risk_level: string;
   confidence: number;
-  factors?: {
-    expiry_risk?: number;
-    temperature_risk?: number;
-    demand_risk?: number;
-    logistics_risk?: number;
+  recommended_action: string;
+  factors: {
+    expiry_risk: number;
+    temperature_risk: number;
+    demand_risk: number;
+    logistics_risk: number;
   };
-  recommended_action?: string;
 }
 
 /**
- * Decision Engine: Generate intelligent decisions for food batches.
- *
- * When a live backend assessment is available, it is blended with
- * the local simulation risk so CHRONOS decisions respond to both
- * operational context and AI-generated risk intelligence.
+ * Generate an autonomous decision for a food batch.
  */
 export const generateDecision = (
   batch: FoodBatch,
   worldState: WorldState,
-  liveRisk?: LiveRiskAssessment
+  liveRisk?: LiveRiskInput | null
 ): Decision => {
   const decisionId = `decision-${batch.id}-${Date.now()}`;
 
@@ -48,7 +41,7 @@ export const generateDecision = (
     hour12: false,
   });
 
-  // Local CHRONOS simulation risk
+  // Local simulation-based risk
   const localRisk = calculateBatchRisk(
     batch,
     worldState.demandMultiplier,
@@ -56,7 +49,18 @@ export const generateDecision = (
     getRiskLogisticsFactor(batch, worldState)
   );
 
-  // Generate risk factors using live backend values when available.
+  // Live AI risk, if available
+  const liveRiskScore =
+    liveRisk && Number.isFinite(Number(liveRisk.risk_score))
+      ? Number(liveRisk.risk_score)
+      : undefined;
+
+  // Combine local and backend intelligence
+  const effectiveRiskScore =
+    liveRiskScore !== undefined
+      ? (localRisk.score + liveRiskScore) / 2
+      : localRisk.score;
+
   const riskFactors = generateRiskFactors(
     batch,
     localRisk,
@@ -64,27 +68,20 @@ export const generateDecision = (
     liveRisk
   );
 
-  // Generate alternatives using the combined risk context.
   const alternatives = generateAlternatives(
     batch,
     worldState,
     riskFactors,
+    effectiveRiskScore,
     liveRisk
   );
 
-  // Select the highest-scoring alternative.
-  const recommendedAlternative = alternatives.reduce((best, alternative) =>
-    alternative.overallScore > best.overallScore
-      ? alternative
-      : best
+  const recommendedAlternative = alternatives.reduce(
+    (best, alternative) =>
+      alternative.overallScore > best.overallScore
+        ? alternative
+        : best
   );
-
-  // Autonomous execution is only enabled when risk is high enough
-  // and the application settings allow autonomous operation.
-  const executionMode =
-    shouldUseAutonomousExecution(liveRisk, localRisk, worldState)
-      ? 'autonomous'
-      : 'human-approval';
 
   return {
     id: decisionId,
@@ -100,32 +97,9 @@ export const generateDecision = (
     ),
     alternatives,
     riskFactors,
-    executionMode,
+    executionMode: 'human-approval',
     status: 'pending',
   };
-};
-
-/**
- * Returns the live backend risk score on a 0-100 scale.
- *
- * If the backend returns a value between 0 and 1, it is interpreted
- * as a probability and converted to a percentage.
- */
-const normalizeLiveRiskScore = (
-  liveRisk?: LiveRiskAssessment
-): number | null => {
-  if (!liveRisk || typeof liveRisk.risk_score !== 'number') {
-    return null;
-  }
-
-  const rawScore = liveRisk.risk_score;
-
-  const normalizedScore =
-    rawScore >= 0 && rawScore <= 1
-      ? rawScore * 100
-      : rawScore;
-
-  return Math.max(0, Math.min(100, normalizedScore));
 };
 
 const getRiskTemperatureFactor = (
@@ -156,9 +130,7 @@ const getRiskLogisticsFactor = (
 ): number => {
   if (
     worldState.logisticsDisruption.enabled &&
-    worldState.logisticsDisruption.affectedBatches.includes(
-      batch.id
-    )
+    worldState.logisticsDisruption.affectedBatches.includes(batch.id)
   ) {
     return Math.min(
       30,
@@ -169,17 +141,11 @@ const getRiskLogisticsFactor = (
   return 0;
 };
 
-/**
- * Builds explainable risk factors.
- *
- * Backend factors are used when present, while local simulation
- * factors provide the fallback.
- */
 const generateRiskFactors = (
   batch: FoodBatch,
   _risk: RiskCalculation,
   worldState: WorldState,
-  liveRisk?: LiveRiskAssessment
+  liveRisk?: LiveRiskInput | null
 ): Array<{
   name: string;
   score: number;
@@ -191,145 +157,78 @@ const generateRiskFactors = (
     description: string;
   }> = [];
 
-  const backendFactors = liveRisk?.factors;
-
-  // Freshness / expiry risk
-  const localFreshnessScore = Math.max(
+  const freshnessScore = Math.max(
     0,
-    Math.min(
-      100,
-      (5 - batch.daysRemaining) ** 2 * 5
-    )
+    Math.min(100, (5 - batch.daysRemaining) ** 2 * 5)
   );
-
-  const freshnessScore =
-    backendFactors?.expiry_risk !== undefined
-      ? Math.max(
-          0,
-          Math.min(100, backendFactors.expiry_risk)
-        )
-      : localFreshnessScore;
 
   factors.push({
     name: 'Freshness Risk',
     score: freshnessScore,
-    description:
-      backendFactors?.expiry_risk !== undefined
-        ? `Live AI expiry analysis reports a risk score of ${freshnessScore.toFixed(
-            1
-          )}.`
-        : `${batch.daysRemaining} days remaining. Exponential decay curve applied.`,
+    description: `${batch.daysRemaining} days remaining. Shelf-life risk calculated from remaining freshness.`,
   });
 
-  // Demand risk
-  const localDemandScore =
-    worldState.demandMultiplier < 1.0
-      ? (1.0 - worldState.demandMultiplier) * 50
-      : 0;
-
   const demandScore =
-    backendFactors?.demand_risk !== undefined
-      ? Math.max(
-          0,
-          Math.min(100, backendFactors.demand_risk)
-        )
-      : localDemandScore;
+    worldState.demandMultiplier < 1
+      ? (1 - worldState.demandMultiplier) * 50
+      : 0;
 
   factors.push({
     name: 'Demand Risk',
     score: demandScore,
-    description:
-      backendFactors?.demand_risk !== undefined
-        ? `Live AI demand analysis reports a risk score of ${demandScore.toFixed(
-            1
-          )}.`
-        : `Demand multiplier: ${(
-            worldState.demandMultiplier * 100
-          ).toFixed(0)}%. ${
-            worldState.demandMultiplier < 1.0
-              ? 'Surplus risk detected.'
-              : 'Demand sufficient.'
-          }`,
+    description: `Demand multiplier: ${(
+      worldState.demandMultiplier * 100
+    ).toFixed(0)}%. ${
+      worldState.demandMultiplier < 1
+        ? 'Surplus risk detected.'
+        : 'Demand sufficient.'
+    }`,
   });
 
-  // Temperature risk
-  const localTemperatureScore =
-    getRiskTemperatureFactor(batch, worldState);
+  const temperatureRisk = getRiskTemperatureFactor(
+    batch,
+    worldState
+  );
 
-  const temperatureScore =
-    backendFactors?.temperature_risk !== undefined
-      ? Math.max(
-          0,
-          Math.min(
-            100,
-            backendFactors.temperature_risk
-          )
-        )
-      : localTemperatureScore;
-
-  if (temperatureScore > 0) {
+  if (temperatureRisk > 0) {
     factors.push({
       name: 'Temperature Risk',
-      score: temperatureScore,
+      score: temperatureRisk,
       description:
-        backendFactors?.temperature_risk !== undefined
-          ? `Live AI cold-chain analysis reports a risk score of ${temperatureScore.toFixed(
-              1
-            )}.`
-          : 'Cold chain deviation detected. Accelerated decay risk.',
+        'Cold chain deviation detected. Accelerated decay risk.',
     });
   }
 
-  // Logistics risk
-  const localLogisticsScore =
-    getRiskLogisticsFactor(batch, worldState);
+  const logisticsRisk = getRiskLogisticsFactor(
+    batch,
+    worldState
+  );
 
-  const logisticsScore =
-    backendFactors?.logistics_risk !== undefined
-      ? Math.max(
-          0,
-          Math.min(
-            100,
-            backendFactors.logistics_risk
-          )
-        )
-      : localLogisticsScore;
-
-  if (logisticsScore > 0) {
+  if (logisticsRisk > 0) {
     factors.push({
       name: 'Logistics Risk',
-      score: logisticsScore,
-      description:
-        backendFactors?.logistics_risk !== undefined
-          ? `Live AI logistics analysis reports a risk score of ${logisticsScore.toFixed(
-              1
-            )}.`
-          : `Supply delay of ${worldState.logisticsDisruption.delayHours} hours projected.`,
+      score: logisticsRisk,
+      description: `Supply delay of ${worldState.logisticsDisruption.delayHours} hours projected.`,
     });
   }
 
-  // Overall live AI risk factor
-  const liveRiskScore = normalizeLiveRiskScore(liveRisk);
+  // Add backend intelligence safely
+  if (liveRisk) {
+    const safeRiskScore = Number(liveRisk.risk_score) || 0;
+    const safeConfidence = Number(liveRisk.confidence) || 0;
 
-  if (liveRiskScore !== null) {
     factors.push({
-      name: 'Live AI Risk Signal',
-      score: liveRiskScore,
-      description: `FastAPI risk engine classifies this batch as ${
-        liveRisk?.risk_level
-      } risk with ${
-        Number(liveRisk?.confidence ?? 0).toFixed(2)
-      }% model confidence.`,
+      name: 'Live AI Risk',
+      score: Math.min(100, Math.max(0, safeRiskScore)),
+      description: `FastAPI AI assessment: ${
+        liveRisk.risk_level || 'unknown'
+      } risk with ${safeConfidence.toFixed(1)}% confidence.`,
     });
   }
 
   return factors;
 };
 
-/**
- * Generates intervention alternatives and adjusts their scores
- * according to live AI risk when available.
- */
 const generateAlternatives = (
   batch: FoodBatch,
   worldState: WorldState,
@@ -338,43 +237,40 @@ const generateAlternatives = (
     score: number;
     description: string;
   }>,
-  liveRisk?: LiveRiskAssessment
+  effectiveRiskScore: number,
+  liveRisk?: LiveRiskInput | null
 ): DecisionAlternative[] => {
   const alternatives: DecisionAlternative[] = [];
 
-  const totalRiskScore =
-    riskFactors.reduce(
-      (sum, factor) => sum + factor.score,
-      0
-    ) / Math.max(1, riskFactors.length);
+  const safeRiskScore =
+    Number.isFinite(effectiveRiskScore)
+      ? effectiveRiskScore
+      : 0;
 
-  const liveRiskScore =
-    normalizeLiveRiskScore(liveRisk);
+  const backendRecommendation =
+    liveRisk?.recommended_action?.toLowerCase() || '';
 
-  const effectiveRiskScore =
-    liveRiskScore !== null
-      ? totalRiskScore * 0.55 + liveRiskScore * 0.45
-      : totalRiskScore;
+  const matchesBackendRecommendation = (keywords: string[]) =>
+    keywords.some((keyword) =>
+      backendRecommendation.includes(keyword)
+    );
 
-  // Monitor
   alternatives.push({
     id: `alt-monitor-${batch.id}`,
     name: 'Monitor',
     description:
-      'Continue standard inventory rotation and enhanced monitoring',
+      'Continue standard inventory rotation and monitoring',
     wasteReductionPercent: 0,
     valueRecovery: 0,
     operationalRiskLevel:
-      effectiveRiskScore > 55 ? 'high' : 'low',
-    overallScore: Math.max(
-      10,
-      82 - effectiveRiskScore * 0.8
+      safeRiskScore > 60 ? 'high' : 'low',
+    overallScore: Math.round(
+      Math.max(10, 70 - safeRiskScore * 0.5)
     ),
     explanation:
-      'Low intervention strategy. Best when both operational and live AI risk remain low.',
+      'Low intervention. Suitable only when overall risk remains minimal.',
   });
 
-  // Promote
   alternatives.push({
     id: `alt-promote-${batch.id}`,
     name: 'Promote',
@@ -383,108 +279,116 @@ const generateAlternatives = (
     wasteReductionPercent: 45,
     valueRecovery: 65,
     operationalRiskLevel: 'low',
-    overallScore: Math.min(
-      95,
-      55 +
-        (worldState.demandMultiplier > 1.0 ? 28 : 14) +
-        effectiveRiskScore * 0.18
+    overallScore: Math.round(
+      Math.min(
+        95,
+        60 +
+          (worldState.demandMultiplier > 1 ? 25 : 15) -
+          safeRiskScore * 0.3 +
+          (matchesBackendRecommendation([
+            'promote',
+            'discount',
+            'sale',
+          ])
+            ? 15
+            : 0)
+      )
     ),
     explanation:
-      'Drives demand through promotional tactics and accelerates inventory turnover.',
+      'Drives demand through promotional tactics and accelerated turnover.',
   });
 
-  // Transform
   alternatives.push({
     id: `alt-transform-${batch.id}`,
     name: 'Transform',
     description:
-      'Process into value-added products such as ready meals or soups',
+      'Process into value-added products such as ready-meals or soups',
     wasteReductionPercent: 78,
     valueRecovery: 55,
     operationalRiskLevel: 'medium',
-    overallScore: Math.min(
-      96,
-      42 +
-        effectiveRiskScore * 0.68 -
-        (batch.daysRemaining > 4 ? 12 : 0)
+    overallScore: Math.round(
+      Math.min(
+        95,
+        50 +
+          safeRiskScore * 0.6 -
+          (batch.daysRemaining > 3 ? 15 : 0) +
+          (matchesBackendRecommendation([
+            'transform',
+            'process',
+          ])
+            ? 15
+            : 0)
+      )
     ),
     explanation:
-      'Converts at-risk inventory into new SKUs. Strong waste prevention when intervention is required.',
+      'Converts at-risk inventory into value-added products while preventing waste.',
   });
 
-  // Redistribute
   alternatives.push({
     id: `alt-redistribute-${batch.id}`,
     name: 'Redistribute',
     description:
-      'Donate or redirect inventory to food banks, charities, or partner organizations',
+      'Donate to food banks, charities, or partner organizations',
     wasteReductionPercent: 92,
     valueRecovery: 25,
     operationalRiskLevel: 'low',
-    overallScore: Math.min(
-      94,
-      38 +
-        effectiveRiskScore * 0.72 -
-        (worldState.demandMultiplier > 1.0 ? 18 : 0)
+    overallScore: Math.round(
+      Math.min(
+        95,
+        40 +
+          safeRiskScore * 0.7 -
+          (worldState.demandMultiplier > 1 ? 20 : 0) +
+          (matchesBackendRecommendation([
+            'redistribute',
+            'donate',
+            'donation',
+          ])
+            ? 15
+            : 0)
+      )
     ),
     explanation:
-      'Maximum waste prevention and social impact. Particularly valuable when recovery time is limited.',
+      'Prioritizes maximum waste prevention and social impact for highly at-risk inventory.',
   });
 
-  // Accelerated Clearance
   alternatives.push({
     id: `alt-clearance-${batch.id}`,
     name: 'Accelerated Clearance',
     description:
-      'Use deep discounts or product bundles for rapid liquidation',
+      'Use deep discounts or bundling for rapid inventory liquidation',
     wasteReductionPercent: 85,
     valueRecovery: 42,
     operationalRiskLevel:
       batch.daysRemaining <= 2 ? 'medium' : 'low',
-    overallScore: Math.min(
-      97,
-      52 +
-        effectiveRiskScore * 0.55 -
-        (batch.daysRemaining > 6 ? 25 : 0)
+    overallScore: Math.round(
+      Math.min(
+        95,
+        65 +
+          safeRiskScore * 0.4 -
+          (batch.daysRemaining > 5 ? 25 : 0) +
+          (matchesBackendRecommendation([
+            'clearance',
+            'liquidate',
+            'discount',
+          ])
+            ? 15
+            : 0)
+      )
     ),
     explanation:
-      'Time-sensitive aggressive pricing strategy designed for rapid inventory movement.',
+      'Time-sensitive pricing intervention designed for rapid turnover.',
   });
 
-  // Sort alternatives from strongest to weakest recommendation.
   return alternatives.sort(
     (a, b) => b.overallScore - a.overallScore
   );
-};
-
-/**
- * Determines whether CHRONOS can mark the decision as autonomous.
- */
-const shouldUseAutonomousExecution = (
-  liveRisk: LiveRiskAssessment | undefined,
-  localRisk: RiskCalculation,
-  worldState: WorldState
-): boolean => {
-  if (worldState.settings.agentAutonomy !== 'autonomous') {
-    return false;
-  }
-
-  const liveRiskScore =
-    normalizeLiveRiskScore(liveRisk);
-
-  const riskScore =
-    liveRiskScore !== null
-      ? liveRiskScore
-      : localRisk.score;
-
-  return riskScore >= 60;
 };
 
 const generateExplanation = (
   batch: FoodBatch,
   alternative: DecisionAlternative,
   worldState: WorldState,
-  liveRisk?: LiveRiskAssessment
+  liveRisk?: LiveRiskInput | null
 ): string => {
   const fragments: string[] = [];
 
@@ -492,7 +396,6 @@ const generateExplanation = (
     `${batch.name} (${batch.quantity} ${batch.quantityUnit}) located in ${batch.location}.`
   );
 
-  // Shelf-life context
   if (batch.daysRemaining <= 1) {
     fragments.push(
       `Critical freshness: only ${batch.daysRemaining} day remaining.`
@@ -507,56 +410,30 @@ const generateExplanation = (
     );
   }
 
-  // Live backend intelligence
-  if (liveRisk) {
-    const liveRiskScore =
-      normalizeLiveRiskScore(liveRisk);
-
-    fragments.push(
-      `Live AI assessment reports ${
-        liveRisk.risk_level
-      } risk${
-        liveRiskScore !== null
-          ? ` (${liveRiskScore.toFixed(1)}/100)`
-          : ''
-      } with ${Number(
-        liveRisk.confidence
-      ).toFixed(2)}% confidence.`
-    );
-
-    if (liveRisk.recommended_action) {
-      fragments.push(
-        `Backend guidance: ${liveRisk.recommended_action}.`
-      );
-    }
-  }
-
-  // Market context
   if (worldState.demandMultiplier > 1.2) {
     fragments.push(
-      'Strong market demand detected. Sales-focused action is favored.'
+      'Strong market demand detected. Sales-focused action is favorable.'
     );
   } else if (worldState.demandMultiplier < 0.8) {
     fragments.push(
-      'Weak market demand detected. Faster intervention and value recovery are favored.'
+      'Weak market demand detected. More aggressive intervention may be required.'
     );
   }
 
-  // Environmental context
-  if (worldState.currentScenario === 'cold-chain') {
+  if (liveRisk) {
     fragments.push(
-      'Cold chain disruption is active. Accelerated intervention is necessary.'
-    );
-  } else if (
-    worldState.currentScenario === 'combined'
-  ) {
-    fragments.push(
-      'Multiple operational crises detected. Crisis protocol engagement is required.'
+      `Live AI backend assessment reports ${
+        liveRisk.risk_level || 'unknown'
+      } risk with a score of ${
+        Number(liveRisk.risk_score) || 0
+      } and ${
+        (Number(liveRisk.confidence) || 0).toFixed(1)
+      }% confidence.`
     );
   }
 
   fragments.push(
-    `CHRONOS recommendation: ${alternative.name}. ${alternative.explanation}`
+    `Final CHRONOS recommendation: ${alternative.name}. ${alternative.explanation}`
   );
 
   return fragments.join(' ');
@@ -571,19 +448,15 @@ export const evaluateActionOutcome = (
   actualValueRecovery: number;
   notes: string;
 } => {
-  let wasteModifier = 1.0;
-  let valueModifier = 1.0;
+  let wasteModifier = 1;
+  let valueModifier = 1;
 
   if (worldState.currentScenario === 'demand-spike') {
     valueModifier = 1.3;
-  } else if (
-    worldState.currentScenario === 'demand-drop'
-  ) {
+  } else if (worldState.currentScenario === 'demand-drop') {
     wasteModifier = 0.7;
     valueModifier = 0.6;
-  } else if (
-    worldState.currentScenario === 'cold-chain'
-  ) {
+  } else if (worldState.currentScenario === 'cold-chain') {
     wasteModifier = 1.2;
   }
 
@@ -595,10 +468,7 @@ export const evaluateActionOutcome = (
     alternative.valueRecovery * valueModifier
   );
 
-  const notes =
-    `${alternative.name} executed successfully. ` +
-    `${actualWaste}% waste reduction achieved. ` +
-    `Value recovery: ${actualValue}%.`;
+  const notes = `${alternative.name} executed successfully. ${actualWaste}% waste reduction achieved. Value recovery: ${actualValue}%.`;
 
   return {
     actualWasteReduction: actualWaste,

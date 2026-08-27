@@ -20,17 +20,17 @@ interface PipelineStep {
 
 interface AgentDecisionPipelineProps {
   batchName: string;
-  riskScore?: number;
-  recommendedAction?: string;
-  alternativesCount?: number;
+  riskScore: number;
+  recommendedAction: string;
+  alternativesCount: number;
   isExecuted?: boolean;
 }
 
 export default function AgentDecisionPipeline({
   batchName,
-  riskScore = 0,
-  recommendedAction = 'No recommendation available',
-  alternativesCount = 0,
+  riskScore,
+  recommendedAction,
+  alternativesCount,
   isExecuted = false,
 }: AgentDecisionPipelineProps) {
   const steps: PipelineStep[] = [
@@ -43,41 +43,44 @@ export default function AgentDecisionPipeline({
     {
       id: 'reason',
       label: 'REASON',
-      description: `Risk assessment completed. Current risk score: ${riskScore}/100.`,
+      description: `Live AI risk assessment completed. Current risk score: ${Number(
+        riskScore
+      ).toFixed(1)}/100.`,
       status: 'completed',
     },
     {
       id: 'plan',
       label: 'PLAN',
-      description: `${alternativesCount || 3} intervention alternatives generated.`,
+      description: `${alternativesCount} intervention alternatives generated and evaluated.`,
       status: 'completed',
     },
     {
       id: 'simulate',
       label: 'SIMULATE',
-      description: 'Projected operational outcomes evaluated before action.',
+      description:
+        'Projected operational outcomes evaluated before selecting an intervention.',
       status: 'completed',
     },
     {
       id: 'decide',
       label: 'DECIDE',
-      description: `Selected: ${recommendedAction}`,
+      description: `Selected recommendation: ${recommendedAction}.`,
       status: 'completed',
     },
     {
       id: 'act',
       label: 'ACT',
       description: isExecuted
-        ? 'Decision executed and recorded in the audit trail.'
-        : 'Awaiting execution or approval.',
+        ? 'Decision executed and recorded in the CHRONOS audit trail.'
+        : 'Awaiting execution or human approval.',
       status: isExecuted ? 'completed' : 'active',
     },
     {
       id: 'verify',
       label: 'VERIFY',
       description: isExecuted
-        ? 'Monitoring post-intervention risk and outcome.'
-        : 'Verification will begin after execution.',
+        ? 'Monitoring post-intervention risk and operational outcome.'
+        : 'Verification will begin after intervention execution.',
       status: isExecuted ? 'active' : 'pending',
     },
   ];
@@ -93,21 +96,31 @@ export default function AgentDecisionPipeline({
   ];
 
   const getStatusStyles = (status: PipelineStep['status']) => {
-    if (status === 'active') {
-      return 'border-blue-500 bg-blue-950/40';
-    }
+    switch (status) {
+      case 'active':
+        return 'border-blue-500 bg-blue-950/40';
 
-    if (status === 'completed') {
-      return 'border-green-800 bg-slate-900';
-    }
+      case 'completed':
+        return 'border-green-700/70 bg-slate-900';
 
-    return 'border-slate-800 bg-slate-900/50 opacity-60';
+      case 'pending':
+      default:
+        return 'border-slate-800 bg-slate-900/50 opacity-60';
+    }
   };
 
   const getIconStyles = (status: PipelineStep['status']) => {
-    if (status === 'active') return 'text-blue-400';
-    if (status === 'completed') return 'text-green-400';
-    return 'text-slate-500';
+    switch (status) {
+      case 'active':
+        return 'text-blue-400';
+
+      case 'completed':
+        return 'text-emerald-400';
+
+      case 'pending':
+      default:
+        return 'text-slate-500';
+    }
   };
 
   return (
@@ -116,6 +129,7 @@ export default function AgentDecisionPipeline({
         <h3 className="text-lg font-bold text-white">
           Autonomous Agent Pipeline
         </h3>
+
         <p className="text-sm text-slate-400 mt-1">
           How CHRONOS reasoned from observation to intervention.
         </p>
@@ -133,7 +147,11 @@ export default function AgentDecisionPipeline({
               )}`}
             >
               <div className="flex items-center gap-2 mb-3">
-                <Icon size={18} className={getIconStyles(step.status)} />
+                <Icon
+                  size={18}
+                  className={getIconStyles(step.status)}
+                />
+
                 <span className="text-xs font-bold tracking-wider text-white">
                   {index + 1}. {step.label}
                 </span>
