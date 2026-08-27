@@ -55,6 +55,15 @@ export interface DecisionWindowPhase {
 
 export type ScenarioType = 'normal' | 'demand-spike' | 'demand-drop' | 'cold-chain' | 'delivery-delay' | 'combined';
 
+export type AppView = 'dashboard' | 'inventory' | 'alerts' | 'decisions' | 'settings';
+export type AgentAutonomyMode = 'assisted' | 'approval-required' | 'autonomous';
+
+export interface SimulationSettings {
+  riskSensitivity: number;
+  agentAutonomy: AgentAutonomyMode;
+  alertThreshold: 'low' | 'medium' | 'high' | 'critical';
+}
+
 export interface DecisionAlternative {
   id: string;
   name: string;
@@ -126,6 +135,8 @@ export interface WorldState {
   // Decision Intelligence
   selectedBatchId?: string;
   decisionHistory: DecisionHistoryEntry[];
+  activeView: AppView;
+  settings: SimulationSettings;
 }
 
 export interface RiskFactors {

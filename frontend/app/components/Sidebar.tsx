@@ -2,33 +2,36 @@
 
 import React from 'react';
 import { Home, Package, AlertTriangle, Zap, Settings } from 'lucide-react';
+import { AppView } from '@/app/types';
+import { useWorldState } from '@/app/context/WorldContext';
 
 export default function Sidebar() {
+  const { state, setView } = useWorldState();
   const menuItems = [
     {
       icon: Home,
       label: 'Dashboard',
-      active: true,
+      view: 'dashboard' as AppView,
     },
     {
       icon: Package,
       label: 'Inventory',
-      active: false,
+      view: 'inventory' as AppView,
     },
     {
       icon: AlertTriangle,
       label: 'Alerts',
-      active: false,
+      view: 'alerts' as AppView,
     },
     {
       icon: Zap,
       label: 'Decisions',
-      active: false,
+      view: 'decisions' as AppView,
     },
     {
       icon: Settings,
       label: 'Settings',
-      active: false,
+      view: 'settings' as AppView,
     },
   ];
 
@@ -49,8 +52,9 @@ export default function Sidebar() {
           return (
             <button
               key={idx}
+              onClick={() => setView(item.view)}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${
-                item.active
+                state.activeView === item.view
                   ? 'bg-blue-600 text-white'
                   : 'text-slate-300 hover:bg-slate-800'
               }`}

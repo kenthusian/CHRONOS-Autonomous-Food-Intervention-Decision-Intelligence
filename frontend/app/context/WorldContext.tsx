@@ -1,7 +1,22 @@
 'use client';
 
-import React, { createContext, useReducer, useCallback, ReactNode } from 'react';
-import { WorldState, ScenarioType, ImpactMetric, Decision, DecisionHistoryEntry } from '@/app/types';
+import React, {
+  createContext,
+  useReducer,
+  useCallback,
+  ReactNode,
+} from 'react';
+
+import {
+  WorldState,
+  ScenarioType,
+  ImpactMetric,
+  Decision,
+  DecisionHistoryEntry,
+  AppView,
+  SimulationSettings,
+} from '@/app/types';
+
 import {
   mockKPIData,
   mockFoodBatches,
@@ -9,48 +24,106 @@ import {
   mockActiveEvents,
   mockImpactMetrics,
 } from '@/app/data/mockData';
+
 import { applyScenario } from '@/app/utils/scenarioEngine';
 import { generateAgentActivityCycle } from '@/app/utils/agentSimulator';
 import { evaluateActionOutcome } from '@/app/utils/decisionEngine';
 
-// Initial World State
+/* =====================================================
+   INITIAL WORLD STATE
+===================================================== */
+
 const createInitialState = (): WorldState => ({
   batches: mockFoodBatches,
   events: mockActiveEvents,
   activityFeed: mockAgentActivity,
   kpis: mockKPIData,
   impactMetrics: mockImpactMetrics,
+
   currentScenario: 'normal',
+
   demandMultiplier: 1.0,
+
   temperatureAnomalies: {},
+
   logisticsDisruption: {
     enabled: false,
     delayHours: 0,
     affectedBatches: [],
   },
+
   simulationTimestamp: new Date().toISOString(),
+
   decisionCount: mockKPIData.autonomousDecisions,
+
   decisionHistory: [],
+
+  activeView: 'dashboard',
+
+  settings: {
+    riskSensitivity: 50,
+    agentAutonomy: 'approval-required',
+    alertThreshold: 'medium',
+  },
 });
 
-// Actions
-type Action =
-  | { type: 'APPLY_SCENARIO'; scenario: ScenarioType }
-  | { type: 'UPDATE_KPI'; kpis: WorldState['kpis'] }
-  | { type: 'SELECT_BATCH'; batchId?: string }
-  | { type: 'EXECUTE_DECISION'; decision: Decision; selectedAlternativeId: string }
-  | { type: 'RESET' };
+/* =====================================================
+   ACTION TYPES
+===================================================== */
 
-// Helper Functions
-const calculateKPIs = (state: WorldState): WorldState['kpis'] => {
+type Action =
+  | {
+      type: 'APPLY_SCENARIO';
+      scenario: ScenarioType;
+    }
+  | {
+      type: 'UPDATE_KPI';
+      kpis: WorldState['kpis'];
+    }
+  | {
+      type: 'SELECT_BATCH';
+      batchId?: string;
+    }
+  | {
+      type: 'SET_VIEW';
+      view: AppView;
+    }
+  | {
+      type: 'UPDATE_SETTINGS';
+      settings: Partial<SimulationSettings>;
+    }
+  | {
+      type: 'EXECUTE_DECISION';
+      decision: Decision;
+      selectedAlternativeId: string;
+    }
+  | {
+      type: 'RESET';
+    };
+
+/* =====================================================
+   HELPER FUNCTIONS
+===================================================== */
+
+const calculateKPIs = (
+  state: WorldState
+): WorldState['kpis'] => {
   const totalBatches = state.batches.length;
+
   const atRiskCount = state.batches.filter(
-    (b) => b.riskLevel === 'high' || b.riskLevel === 'critical'
+    (batch) =>
+      batch.riskLevel === 'high' ||
+      batch.riskLevel === 'critical'
   ).length;
+
   const overallHealth = Math.round(
     ((totalBatches - atRiskCount) / totalBatches) * 100
   );
-  const wasteAvoided = state.currentScenario === 'normal' ? 12.4 : 18.7;
+
+  const wasteAvoided =
+    state.currentScenario === 'normal'
+      ? 12.4
+      : 18.7;
 
   return {
     overallFoodHealth: overallHealth,
@@ -60,8 +133,10 @@ const calculateKPIs = (state: WorldState): WorldState['kpis'] => {
   };
 };
 
-const calculateImpactMetrics = (state: WorldState): ImpactMetric[] => {
-  const baseMetrics = [
+const calculateImpactMetrics = (
+  state: WorldState
+): ImpactMetric[] => {
+  const baseMetrics: ImpactMetric[] = [
     {
       label: 'Food Saved',
       value: 847.3,
@@ -88,7 +163,6 @@ const calculateImpactMetrics = (state: WorldState): ImpactMetric[] => {
     },
   ];
 
-  // Adjust based on scenario
   if (state.currentScenario === 'demand-spike') {
     baseMetrics[0].value *= 1.3;
     baseMetrics[2].value *= 1.2;
@@ -99,40 +173,45 @@ const calculateImpactMetrics = (state: WorldState): ImpactMetric[] => {
   return baseMetrics;
 };
 
-// Reducer
-const worldReducer = (state: WorldState, action: Action): WorldState => {
+/* =====================================================
+   REDUCER
+===================================================== */
+
+const worldReducer = (
+  state: WorldState,
+  action: Action
+): WorldState => {
   switch (action.type) {
     case 'APPLY_SCENARIO': {
-      // Apply scenario rules to world state
-      const scenarioChanges = applyScenario(state, action.scenario);
+      const scenarioChanges = applyScenario(
+        state,
+        action.scenario
+      );
 
-      // Generate new activity feed
       const newState: WorldState = {
         ...state,
         ...scenarioChanges,
       };
 
-      // Update KPIs based on new batch states
-      const updatedKPIs = calculateKPIs(newState);
-      newState.kpis = updatedKPIs;
+      newState.kpis = calculateKPIs(newState);
 
-      // Generate new activity feed
-      const newActivityFeed = generateAgentActivityCycle(
-        state,
-        newState,
-        action.scenario
-      );
-      newState.activityFeed = newActivityFeed;
+      newState.activityFeed =
+        generateAgentActivityCycle(
+          state,
+          newState,
+          action.scenario
+        );
 
-      // Update impact metrics
-      newState.impactMetrics = calculateImpactMetrics(newState);
+      newState.impactMetrics =
+        calculateImpactMetrics(newState);
 
-      // Update decision count
       newState.decisionCount = Math.max(
         state.decisionCount + 1,
         newState.decisionCount
       );
-      newState.simulationTimestamp = new Date().toISOString();
+
+      newState.simulationTimestamp =
+        new Date().toISOString();
 
       return newState;
     }
@@ -151,103 +230,216 @@ const worldReducer = (state: WorldState, action: Action): WorldState => {
       };
     }
 
+    case 'SET_VIEW': {
+      return {
+        ...state,
+        activeView: action.view,
+      };
+    }
+
+    case 'UPDATE_SETTINGS': {
+      return {
+        ...state,
+        settings: {
+          ...state.settings,
+          ...action.settings,
+        },
+      };
+    }
+
     case 'EXECUTE_DECISION': {
-      const { decision, selectedAlternativeId } = action;
-      const selectedAlternative = decision.alternatives.find(
-        (alt) => alt.id === selectedAlternativeId
+      const {
+        decision,
+        selectedAlternativeId,
+      } = action;
+
+      const selectedAlternative =
+        decision.alternatives.find(
+          (alternative) =>
+            alternative.id === selectedAlternativeId
+        );
+
+      if (!selectedAlternative) {
+        return state;
+      }
+
+      const batch = state.batches.find(
+        (currentBatch) =>
+          currentBatch.id === decision.batchId
       );
 
-      if (!selectedAlternative) return state;
+      if (!batch) {
+        return state;
+      }
 
-      const batch = state.batches.find((b) => b.id === decision.batchId);
-      if (!batch) return state;
+      const outcome = evaluateActionOutcome(
+        batch,
+        selectedAlternative,
+        state
+      );
 
-      // Evaluate outcome
-      const outcome = evaluateActionOutcome(batch, selectedAlternative, state);
+      /* -------------------------
+         DECISION HISTORY
+      ------------------------- */
 
-      // Create history entry
       const historyEntry: DecisionHistoryEntry = {
         id: `history-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        }),
+
+        timestamp: new Date().toLocaleTimeString(
+          'en-US',
+          {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+          }
+        ),
+
         batchId: decision.batchId,
+
         batchName: batch.name,
+
         decision: {
           ...decision,
           selectedAlternativeId,
           status: 'executed',
           executedAt: new Date().toISOString(),
         },
+
         outcome,
       };
 
-      // Add to history
-      const updatedHistory = [historyEntry, ...state.decisionHistory];
+      const updatedHistory = [
+        historyEntry,
+        ...state.decisionHistory,
+      ];
 
-      // Update activity feed
+      /* -------------------------
+         ACTIVITY FEED
+      ------------------------- */
+
       const newActivity = {
         id: `activity-decision-${Date.now()}`,
-        timestamp: new Date().toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        }),
+
+        timestamp: new Date().toLocaleTimeString(
+          'en-US',
+          {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+          }
+        ),
+
         phase: 'monitor' as const,
+
         title: `Decision Executed: ${selectedAlternative.name}`,
+
         description: `${batch.name} intervention: ${selectedAlternative.name}. Projected waste reduction: ${outcome.actualWasteReduction}%. ${outcome.notes}`,
+
         batchId: decision.batchId,
       };
 
-      const updatedBatches = state.batches.map((currentBatch) =>
-        currentBatch.id === batch.id
-          ? {
-              ...currentBatch,
-              riskLevel: 'low' as const,
-              recommendedAction: `Executed: ${selectedAlternative.name}`,
-              lastChecked: new Date().toLocaleString('en-US', {
-                dateStyle: 'short',
-                timeStyle: 'short',
-              }),
-            }
-          : currentBatch
+      /* -------------------------
+         UPDATE BATCH
+      ------------------------- */
+
+      const updatedBatches = state.batches.map(
+        (currentBatch) =>
+          currentBatch.id === batch.id
+            ? {
+                ...currentBatch,
+
+                riskLevel: 'low' as const,
+
+                recommendedAction: `Executed: ${selectedAlternative.name}`,
+
+                lastChecked:
+                  new Date().toLocaleString(
+                    'en-US',
+                    {
+                      dateStyle: 'short',
+                      timeStyle: 'short',
+                    }
+                  ),
+              }
+            : currentBatch
       );
-      const updatedImpactMetrics = state.impactMetrics.map((metric) => {
-        if (metric.label === 'Food Saved') {
-          return {
-            ...metric,
-            value: metric.value + (batch.quantity * outcome.actualWasteReduction) / 100,
-          };
-        }
-        if (metric.label === 'Value Recovered') {
-          return {
-            ...metric,
-            value: metric.value + outcome.actualValueRecovery,
-          };
-        }
-        if (metric.label === 'Interventions') {
-          return { ...metric, value: metric.value + 1 };
-        }
-        return metric;
-      });
-      const updatedDecisionCount = state.decisionCount + 1;
+
+      /* -------------------------
+         UPDATE IMPACT METRICS
+      ------------------------- */
+
+      const updatedImpactMetrics =
+        state.impactMetrics.map((metric) => {
+          if (metric.label === 'Food Saved') {
+            return {
+              ...metric,
+
+              value:
+                metric.value +
+                (batch.quantity *
+                  outcome.actualWasteReduction) /
+                  100,
+            };
+          }
+
+          if (metric.label === 'Value Recovered') {
+            return {
+              ...metric,
+
+              value:
+                metric.value +
+                outcome.actualValueRecovery,
+            };
+          }
+
+          if (metric.label === 'Interventions') {
+            return {
+              ...metric,
+              value: metric.value + 1,
+            };
+          }
+
+          return metric;
+        });
+
+      const updatedDecisionCount =
+        state.decisionCount + 1;
+
+      /* =====================================================
+         IMPORTANT FIX
+
+         selectedBatchId IS NOT cleared here.
+
+         The modal remains open so the verification screen
+         can be displayed after execution.
+      ===================================================== */
 
       return {
         ...state,
+
         batches: updatedBatches,
+
         kpis: {
           ...state.kpis,
-          autonomousDecisions: updatedDecisionCount,
+          autonomousDecisions:
+            updatedDecisionCount,
         },
-        impactMetrics: updatedImpactMetrics,
-        decisionHistory: updatedHistory,
-        activityFeed: [newActivity, ...state.activityFeed],
-        decisionCount: updatedDecisionCount,
-        selectedBatchId: undefined,
+
+        impactMetrics:
+          updatedImpactMetrics,
+
+        decisionHistory:
+          updatedHistory,
+
+        activityFeed: [
+          newActivity,
+          ...state.activityFeed,
+        ],
+
+        decisionCount:
+          updatedDecisionCount,
       };
     }
 
@@ -260,51 +452,141 @@ const worldReducer = (state: WorldState, action: Action): WorldState => {
   }
 };
 
-// Context Type
+/* =====================================================
+   CONTEXT
+===================================================== */
+
 interface WorldContextType {
   state: WorldState;
-  applyScenario: (scenario: ScenarioType) => void;
-  selectBatch: (batchId?: string) => void;
-  executeDecision: (decision: Decision, selectedAlternativeId: string) => void;
+
+  applyScenario: (
+    scenario: ScenarioType
+  ) => void;
+
+  selectBatch: (
+    batchId?: string
+  ) => void;
+
+  setView: (
+    view: AppView
+  ) => void;
+
+  updateSettings: (
+    settings: Partial<SimulationSettings>
+  ) => void;
+
+  executeDecision: (
+    decision: Decision,
+    selectedAlternativeId: string
+  ) => void;
+
   reset: () => void;
 }
 
-// Create Context
-const WorldContext = createContext<WorldContextType | undefined>(undefined);
+const WorldContext =
+  createContext<WorldContextType | undefined>(
+    undefined
+  );
 
-// Provider Component
+/* =====================================================
+   PROVIDER
+===================================================== */
+
 interface WorldProviderProps {
   children: ReactNode;
 }
 
-export const WorldProvider: React.FC<WorldProviderProps> = ({ children }) => {
-  const [state, dispatch] = useReducer(worldReducer, undefined, createInitialState);
+export const WorldProvider: React.FC<
+  WorldProviderProps
+> = ({ children }) => {
+  const [state, dispatch] = useReducer(
+    worldReducer,
+    undefined,
+    createInitialState
+  );
 
-  const applyScenarioAction = useCallback((scenario: ScenarioType) => {
-    dispatch({ type: 'APPLY_SCENARIO', scenario });
-  }, []);
+  const applyScenarioAction = useCallback(
+    (scenario: ScenarioType) => {
+      dispatch({
+        type: 'APPLY_SCENARIO',
+        scenario,
+      });
+    },
+    []
+  );
 
-  const selectBatchAction = useCallback((batchId?: string) => {
-    dispatch({ type: 'SELECT_BATCH', batchId });
-  }, []);
+  const selectBatchAction = useCallback(
+    (batchId?: string) => {
+      dispatch({
+        type: 'SELECT_BATCH',
+        batchId,
+      });
+    },
+    []
+  );
+
+  const setViewAction = useCallback(
+    (view: AppView) => {
+      dispatch({
+        type: 'SET_VIEW',
+        view,
+      });
+    },
+    []
+  );
+
+  const updateSettingsAction = useCallback(
+    (
+      settings: Partial<SimulationSettings>
+    ) => {
+      dispatch({
+        type: 'UPDATE_SETTINGS',
+        settings,
+      });
+    },
+    []
+  );
 
   const executeDecisionAction = useCallback(
-    (decision: Decision, selectedAlternativeId: string) => {
-      dispatch({ type: 'EXECUTE_DECISION', decision, selectedAlternativeId });
+    (
+      decision: Decision,
+      selectedAlternativeId: string
+    ) => {
+      dispatch({
+        type: 'EXECUTE_DECISION',
+        decision,
+        selectedAlternativeId,
+      });
     },
     []
   );
 
   const resetState = useCallback(() => {
-    dispatch({ type: 'RESET' });
+    dispatch({
+      type: 'RESET',
+    });
   }, []);
 
   const value: WorldContextType = {
     state,
-    applyScenario: applyScenarioAction,
-    selectBatch: selectBatchAction,
-    executeDecision: executeDecisionAction,
-    reset: resetState,
+
+    applyScenario:
+      applyScenarioAction,
+
+    selectBatch:
+      selectBatchAction,
+
+    setView:
+      setViewAction,
+
+    updateSettings:
+      updateSettingsAction,
+
+    executeDecision:
+      executeDecisionAction,
+
+    reset:
+      resetState,
   };
 
   return (
@@ -314,11 +596,20 @@ export const WorldProvider: React.FC<WorldProviderProps> = ({ children }) => {
   );
 };
 
-// Custom Hook
-export const useWorldState = (): WorldContextType => {
-  const context = React.useContext(WorldContext);
-  if (!context) {
-    throw new Error('useWorldState must be used within WorldProvider');
-  }
-  return context;
-};
+/* =====================================================
+   CUSTOM HOOK
+===================================================== */
+
+export const useWorldState =
+  (): WorldContextType => {
+    const context =
+      React.useContext(WorldContext);
+
+    if (!context) {
+      throw new Error(
+        'useWorldState must be used within WorldProvider'
+      );
+    }
+
+    return context;
+  };
