@@ -282,24 +282,20 @@ DEMAND_RATES = {
 
 async def seed_data() -> None:
     """Wipe all tables and load fresh scenario data."""
-    import aiosqlite
-    from pathlib import Path
-    DB_PATH = Path(__file__).parent.parent / "inventory.db"
+    import random
+    
+    client = await db.get_supabase()
 
-    async with aiosqlite.connect(DB_PATH) as database:
-        await database.executescript("""
-            PRAGMA foreign_keys = OFF;
-            DELETE FROM operations;
-            DELETE FROM agent_recommendations;
-            DELETE FROM demand_config;
-            DELETE FROM demand_history;
-            DELETE FROM inventory_batches;
-            DELETE FROM warehouses;
-            DELETE FROM products;
-            DELETE FROM sqlite_sequence;
-            PRAGMA foreign_keys = ON;
-        """)
-        await database.commit()
+    # Clear tables safely (using neq on ID to match all rows)
+    await client.table("operations").delete().neq("id", -1).execute()
+    await client.table("agent_recommendations").delete().neq("id", -1).execute()
+    
+    # demand_config has no id, it has product_id and warehouse_id
+    await client.table("demand_config").delete().neq("product_id", -1).execute()
+    await client.table("demand_history").delete().neq("id", -1).execute()
+    await client.table("inventory_batches").delete().neq("id", -1).execute()
+    await client.table("warehouses").delete().neq("id", -1).execute()
+    await client.table("products").delete().neq("id", -1).execute()
 
     # Products
     product_ids = {}

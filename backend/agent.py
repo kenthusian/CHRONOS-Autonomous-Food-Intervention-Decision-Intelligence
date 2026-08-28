@@ -376,7 +376,29 @@ Return ONLY the JSON object. Make sure the logic is smart, considers transit tim
 
     # ── Step 5: Persist to DB ──────────────────────────────────────
     decisions = []
+    
+    # Fetch existing recommendations to prevent duplicates
+    existing_recs = await db.get_recommendations()
+    # Only care about recently made recommendations (e.g. pending, or recently rejected/accepted)
+    # We will just check if a recommendation with the same product, action, and source/dest exists.
+    # To keep it simple, if a recommendation with same core attributes exists in the last 100 recs, skip it.
+    recent_recs = existing_recs[:200]
+    
+    def is_duplicate(rec):
+        for er in recent_recs:
+            if (er.get("product_id") == rec["product_id"] and
+                er.get("from_warehouse_id") == rec["from_warehouse_id"] and
+                er.get("to_warehouse_id") == rec.get("to_warehouse_id") and
+                er.get("action_type") == rec["action_type"]):
+                # If it's pending, accepted, or rejected recently, we consider it a duplicate
+                if er.get("status") in ["pending", "accepted", "rejected"]:
+                    return True
+        return False
+
     for rec in recs:
+        if is_duplicate(rec):
+            continue
+            
         rec["status"] = "pending"
         try:
             rid = await db.create_recommendation(rec)
@@ -389,127 +411,145 @@ Return ONLY the JSON object. Make sure the logic is smart, considers transit tim
 import os
 import json
 import urllib.request
+import asyncio
+from duckduckgo_search import DDGS
+
+async def _call_llm(prompt: str) -> dict:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return {}
+        
+    try:
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "ChronosAI/1.0"
+            },
+            data=json.dumps({
+                "model": "qwen/qwen3.8-27b",
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"}
+            }).encode("utf-8")
+        )
+        def fetch():
+            with urllib.request.urlopen(req) as response:
+                return json.loads(response.read().decode())
+        result = await asyncio.to_thread(fetch)
+        content = result["choices"][0]["message"]["content"]
+        return json.loads(content)
+    except Exception as e:
+        error_msg = str(e)
+        if hasattr(e, 'read'):
+            error_msg = e.read().decode()
+        with open("llm_error.log", "a") as f:
+            f.write(f"LLM Error: {error_msg}\n")
+        print(f"Agent LLM error: {error_msg}")
+        return {}
+
+async def _risk_agent(rec: dict) -> dict:
+    prompt = f"""You are the Risk & Spoilage Agent. Evaluate this recommendation:
+{json.dumps(rec)}
+Output JSON: {{"risk_score": 1-10, "analysis": "brief explanation", "dialogue": "A short, professional quote stating your findings"}}"""
+    res = await _call_llm(prompt)
+    if not res: res = {"risk_score": 5, "analysis": "Fallback", "dialogue": "Risk assessment complete."}
+    return res
+
+async def _logistics_agent(rec: dict) -> dict:
+    web_context = ""
+    # Exogenous Web-Awareness
+    if rec.get("to_city"):
+        try:
+            results = DDGS().text(f"{rec['to_city']} weather traffic disruptions today", max_results=2)
+            web_context = "Live Web Data for Destination: " + json.dumps(results)
+        except Exception:
+            web_context = "Web search unavailable."
+            
+    prompt = f"""You are the Logistics & Routing Agent. Evaluate this recommendation:
+{json.dumps(rec)}
+{web_context}
+Based on the live web data, assess if there are any real-world delays.
+Output JSON: {{"feasibility": "high"|"medium"|"low", "analysis": "brief explanation", "dialogue": "A short quote stating your logistics and weather findings"}}"""
+    res = await _call_llm(prompt)
+    if not res: res = {"feasibility": "medium", "analysis": "Fallback", "dialogue": "Logistics checked."}
+    return res
+
+async def _finance_agent(rec: dict) -> dict:
+    prompt = f"""You are the Financial Pricing Agent. Evaluate this recommendation:
+{json.dumps(rec)}
+If this is a discount, propose an exact discount percentage based on the urgency.
+Output JSON: {{"roi_score": 1-10, "analysis": "brief explanation", "dialogue": "A short quote stating your financial stance."}}"""
+    res = await _call_llm(prompt)
+    if not res: res = {"roi_score": 5, "analysis": "Fallback", "dialogue": "Financials look standard."}
+    return res
+
+async def _orchestrator_agent(rec: dict, risk: dict, log: dict, fin: dict) -> dict:
+    prompt = f"""You are the Orchestrator Agent. Make a final decision based on your sub-agents' analysis:
+Recommendation: {json.dumps(rec)}
+Risk: {json.dumps(risk)}
+Logistics: {json.dumps(log)}
+Finance: {json.dumps(fin)}
+
+Rules:
+- ALWAYS approve 'critical' urgency items if feasibility is not 'low'.
+- Approve if roi_score > 6 and risk_score > 6.
+- Otherwise, ignore.
+
+Output JSON: {{"decision": "approve"|"ignore", "thought": "Brief explanation synthesizing the sub-agents' views.", "dialogue": "Your final executive decision."}}"""
+    res = await _call_llm(prompt)
+    if not res: res = {"decision": "ignore", "thought": "Error", "dialogue": "Decision deferred."}
+    return res
 
 async def run_autopilot() -> list[dict]:
-    """
-    Agentic loop:
-    1. Runs the normal analysis to generate pending recommendations.
-    2. Uses Groq to evaluate the pending recommendations and decide which to auto-approve.
-    3. Auto-approves the chosen recommendations and returns a thought log.
-    """
     await run_analysis()
     pending = await db.get_recommendations(status="pending")
     if not pending:
-        return [{"thought": "No pending recommendations to evaluate. Inventory is healthy.", "action": "none"}]
+        return [{"thought": "No pending recommendations.", "action": "none"}]
         
-    api_key = os.environ.get("GROQ_API_KEY")
-    evaluations = []
-    llm_failed = False
-    llm_error = ""
-    
-    if api_key:
-        prompt = f"""You are an autonomous supply chain agent.
-You have the following pending recommendations:
-{json.dumps([{
-    'id': r['id'], 
-    'action_type': r['action_type'], 
-    'product': r['product_name'], 
-    'urgency': r['urgency'],
-    'estimated_saving': r['estimated_saving'],
-    'reason': r.get('detail', {}).get('reason', '')
-} for r in pending], indent=2)}
-
-Your task is to review these recommendations and decide which ones to autonomously approve.
-Rules for auto-approval:
-- ALWAYS approve 'critical' urgency items to prevent stockouts.
-- ALWAYS approve 'redistribute' or 'discount' if estimated_saving > 500.
-- DO NOT approve 'reorder' unless urgency is 'high' or 'critical'.
-
-Output a JSON object with a key "evaluations" containing an array of objects, where each object represents your evaluation of a recommendation.
-Format:
-{{
-  "evaluations": [
-    {{
-      "recommendation_id": 1,
-      "decision": "approve" | "ignore",
-      "thought": "Brief explanation of why you made this decision based on the rules."
-    }}
-  ]
-}}
-"""
-        try:
-            req = urllib.request.Request(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "ChronosAI/1.0"
-                },
-                data=json.dumps({
-                    "model": "qwen/qwen3.8-27b",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "response_format": {"type": "json_object"}
-                }).encode("utf-8")
-            )
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode())
-                content = result["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
-                evaluations = parsed.get("evaluations", [])
-        except Exception as e:
-            llm_failed = True
-            llm_error = str(e)
-            
-    if not api_key or llm_failed:
-        # Fallback to programmatic heuristic rule-based evaluations
-        for r in pending:
-            action_type = r['action_type']
-            urgency = r['urgency']
-            saving = r.get('estimated_saving', 0)
-            
-            decision = "ignore"
-            thought = f"Did not meet auto-approval threshold for {action_type}. (Local rules)"
-            
-            if urgency == "critical":
-                decision = "approve"
-                thought = "Auto-approved because urgency is 'critical'. (Local rules)"
-            elif action_type in ["redistribute", "discount"] and saving > 500:
-                decision = "approve"
-                thought = f"Auto-approved because estimated saving (₹{saving}) > 500. (Local rules)"
-            elif action_type == "reorder" and urgency == "high":
-                decision = "approve"
-                thought = "Auto-approved reorder because urgency is 'high'. (Local rules)"
-                
-            evaluations.append({
-                "recommendation_id": r['id'],
-                "decision": decision,
-                "thought": thought
-            })
-            
     results = []
-    if llm_failed:
-        results.append({"thought": f"Groq API unavailable ({llm_error.split('.')[0]}). Running local heuristics...", "action": "info"})
-    if isinstance(evaluations, dict):
-        evaluations = [evaluations]
-    elif not isinstance(evaluations, list):
-        evaluations = []
-
-    # Avoid circular import by doing this inside the function
     from .mcp_server import execute_operation
-    for eval in evaluations:
-        if not isinstance(eval, dict):
-            continue
-        rid = eval.get("recommendation_id")
-        decision = eval.get("decision")
-        thought = eval.get("thought")
+    
+    # Throttle to 1 recommendation per tick to avoid exceeding 8000 TPM rate limits
+    pending = pending[:1]
+    
+    for r in pending:
+        rec_context = {
+            'id': r['id'], 
+            'action_type': r['action_type'], 
+            'product': r['product_name'], 
+            'urgency': r['urgency'],
+            'estimated_saving': r.get('estimated_saving', 0),
+            'from_city': r.get('from_city'),
+            'to_city': r.get('to_city')
+        }
         
-        if decision == "approve" and rid:
+        risk, log, fin = await asyncio.gather(
+            _risk_agent(rec_context),
+            _logistics_agent(rec_context),
+            _finance_agent(rec_context)
+        )
+        
+        final = await _orchestrator_agent(rec_context, risk, log, fin)
+        decision = final.get("decision", "ignore")
+        
+        debate_log = f"<br><strong>[Risk Agent]:</strong> {risk.get('dialogue')} <br><strong>[Logistics Agent]:</strong> {log.get('dialogue')} <br><strong>[Finance Agent]:</strong> {fin.get('dialogue')} <br><strong>[Orchestrator]:</strong> {final.get('dialogue')}"
+        
+        rid = r['id']
+        
+        if final.get("thought") == "Error":
+            # API failure (e.g. rate limit). Leave as pending, do not reject!
+            results.append({"thought": debate_log + "<br><em>API Rate Limit hit. Deferring.</em>", "action": f"Deferred #{rid}"})
+            continue
+            
+        if decision == "approve":
             res = await execute_operation(rid)
             if res.get("status") == "success":
-                results.append({"thought": thought, "action": f"Auto-approved recommendation #{rid} -> Operation #{res.get('operation_id')}"})
+                results.append({"thought": debate_log, "action": f"Multi-Agent Auto-approved #{rid}"})
             else:
-                results.append({"thought": thought, "action": f"Failed to approve recommendation #{rid}"})
+                results.append({"thought": debate_log, "action": f"Failed to approve #{rid}"})
         else:
-            results.append({"thought": thought, "action": f"Ignored recommendation #{rid}"})
+            await db.resolve_recommendation(rid, "rejected", final.get("thought", ""))
+            results.append({"thought": debate_log, "action": f"Multi-Agent Rejected #{rid}"})
             
     return results

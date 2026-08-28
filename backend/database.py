@@ -1,232 +1,89 @@
 """
-database.py — Full async SQLite layer for the Food Inventory Optimization App.
-
-Tables:
-  products            — food item catalogue
-  warehouses          — physical storage locations
-  inventory_batches   — individual lots with expiry dates
-  demand_history      — daily demand actuals (computed or manual)
-  demand_config       — per-(product,warehouse) manual daily-demand override
-  agent_recommendations — AI-generated action suggestions
-  operations          — accepted actions (transfers, POs, discounts)
+database.py — Full async Supabase layer for the Food Inventory Optimization App.
 """
 
 from __future__ import annotations
-import aiosqlite
+import os
 import json
-from pathlib import Path
 from datetime import date, timedelta
 
-DB_PATH = Path(__file__).parent.parent / "inventory.db"
+from supabase._async.client import create_client as create_async_client, AsyncClient
 
+_supabase: AsyncClient | None = None
 
-# ═══════════════════════════════════════════════════════════════════
-#  SCHEMA
-# ═══════════════════════════════════════════════════════════════════
-
-SCHEMA = """
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS products (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    name                TEXT    NOT NULL,
-    category            TEXT    NOT NULL DEFAULT '',
-    unit                TEXT    NOT NULL DEFAULT 'kg',
-    default_shelf_days  INTEGER NOT NULL DEFAULT 7,
-    default_daily_demand REAL   NOT NULL DEFAULT 50,
-    reorder_qty         REAL    NOT NULL DEFAULT 200,
-    supplier_lead_days  INTEGER NOT NULL DEFAULT 3,
-    requires_cold_chain INTEGER NOT NULL DEFAULT 0,
-    cost_per_unit       REAL    NOT NULL DEFAULT 0,
-    created_at          TEXT    DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS warehouses (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    name                TEXT    NOT NULL,
-    city                TEXT    NOT NULL DEFAULT '',
-    region              TEXT    NOT NULL DEFAULT '',
-    lat                 REAL    DEFAULT 20.5,
-    lng                 REAL    DEFAULT 78.9,
-    capacity_units      REAL    NOT NULL DEFAULT 10000,
-    has_cold_storage    INTEGER NOT NULL DEFAULT 0,
-    transport_time_days REAL    NOT NULL DEFAULT 1.5,
-    contact_person      TEXT    DEFAULT '',
-    contact_phone       TEXT    DEFAULT '',
-    created_at          TEXT    DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS inventory_batches (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id      INTEGER NOT NULL REFERENCES products(id)   ON DELETE CASCADE,
-    warehouse_id    INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
-    batch_no        TEXT    NOT NULL,
-    quantity        REAL    NOT NULL DEFAULT 0,
-    manufacture_date TEXT,
-    expiry_date     TEXT    NOT NULL,
-    cost_per_unit   REAL    NOT NULL DEFAULT 0,
-    received_date   TEXT    DEFAULT (date('now')),
-    notes           TEXT    DEFAULT '',
-    created_at      TEXT    DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS demand_history (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id          INTEGER NOT NULL REFERENCES products(id)   ON DELETE CASCADE,
-    warehouse_id        INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
-    date                TEXT    NOT NULL,
-    quantity_sold       REAL    NOT NULL DEFAULT 0,
-    is_manual_override  INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(product_id, warehouse_id, date)
-);
-
-CREATE TABLE IF NOT EXISTS demand_config (
-    product_id          INTEGER NOT NULL REFERENCES products(id)   ON DELETE CASCADE,
-    warehouse_id        INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
-    manual_daily_demand REAL,
-    updated_at          TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY(product_id, warehouse_id)
-);
-
-CREATE TABLE IF NOT EXISTS agent_recommendations (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id          INTEGER REFERENCES products(id),
-    from_warehouse_id   INTEGER REFERENCES warehouses(id),
-    to_warehouse_id     INTEGER REFERENCES warehouses(id),
-    action_type         TEXT    NOT NULL,
-    urgency             TEXT    NOT NULL DEFAULT 'medium',
-    quantity            REAL,
-    estimated_saving    REAL    DEFAULT 0,
-    estimated_cost      REAL    DEFAULT 0,
-    detail_json         TEXT,
-    status              TEXT    NOT NULL DEFAULT 'pending',
-    rejection_reason    TEXT,
-    created_at          TEXT    DEFAULT (datetime('now')),
-    resolved_at         TEXT
-);
-
-CREATE TABLE IF NOT EXISTS operations (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    recommendation_id   INTEGER REFERENCES agent_recommendations(id),
-    op_type             TEXT    NOT NULL,
-    product_id          INTEGER REFERENCES products(id),
-    from_warehouse_id   INTEGER REFERENCES warehouses(id),
-    to_warehouse_id     INTEGER REFERENCES warehouses(id),
-    quantity            REAL,
-    status              TEXT    NOT NULL DEFAULT 'planned',
-    scheduled_date      TEXT,
-    completed_date      TEXT,
-    estimated_cost      REAL    DEFAULT 0,
-    actual_cost         REAL,
-    notes               TEXT    DEFAULT '',
-    created_at          TEXT    DEFAULT (datetime('now'))
-);
-"""
-
-
-async def init_db() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.executescript(SCHEMA)
-        await db.commit()
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  HELPERS
-# ═══════════════════════════════════════════════════════════════════
-
-async def _fetchall(sql: str, params: tuple = ()) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(sql, params) as cur:
-            return [dict(r) for r in await cur.fetchall()]
-
-
-async def _fetchone(sql: str, params: tuple = ()) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(sql, params) as cur:
-            row = await cur.fetchone()
-            return dict(row) if row else None
-
-
-async def _execute(sql: str, params: tuple = ()) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(sql, params)
-        await db.commit()
-        return cur.lastrowid
-
+async def get_supabase() -> AsyncClient:
+    global _supabase
+    if _supabase is None:
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_KEY", "")
+        _supabase = await create_async_client(url, key)
+    return _supabase
 
 # ═══════════════════════════════════════════════════════════════════
 #  PRODUCTS
 # ═══════════════════════════════════════════════════════════════════
 
 async def get_all_products() -> list[dict]:
-    return await _fetchall("SELECT * FROM products ORDER BY category, name")
-
+    client = await get_supabase()
+    res = await client.table("products").select("*").order("category").order("name").execute()
+    return res.data
 
 async def get_product(pid: int) -> dict | None:
-    return await _fetchone("SELECT * FROM products WHERE id = ?", (pid,))
-
+    client = await get_supabase()
+    res = await client.table("products").select("*").eq("id", pid).execute()
+    return res.data[0] if res.data else None
 
 async def create_product(data: dict) -> int:
-    return await _execute("""
-        INSERT INTO products
-            (name, category, unit, default_shelf_days, default_daily_demand,
-             reorder_qty, supplier_lead_days, requires_cold_chain, cost_per_unit)
-        VALUES (:name,:category,:unit,:default_shelf_days,:default_daily_demand,
-                :reorder_qty,:supplier_lead_days,:requires_cold_chain,:cost_per_unit)
-    """, data)  # type: ignore[arg-type]
-
+    client = await get_supabase()
+    if "requires_cold_chain" in data:
+        data["requires_cold_chain"] = bool(data["requires_cold_chain"])
+    res = await client.table("products").insert(data).execute()
+    return res.data[0]["id"] if res.data else -1
 
 async def update_product(pid: int, data: dict) -> None:
     if not data:
         return
-    fields = ", ".join(f"{k} = :{k}" for k in data)
-    data["id"] = pid
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(f"UPDATE products SET {fields} WHERE id = :id", data)
-        await db.commit()
-
+    client = await get_supabase()
+    await client.table("products").update(data).eq("id", pid).execute()
 
 async def delete_product(pid: int) -> None:
-    await _execute("DELETE FROM products WHERE id = ?", (pid,))
-
+    client = await get_supabase()
+    await client.table("products").delete().eq("id", pid).execute()
 
 # ═══════════════════════════════════════════════════════════════════
 #  WAREHOUSES
 # ═══════════════════════════════════════════════════════════════════
 
 async def get_all_warehouses() -> list[dict]:
-    return await _fetchall("SELECT * FROM warehouses ORDER BY region, city")
-
+    client = await get_supabase()
+    res = await client.table("warehouses").select("*").order("region").order("city").execute()
+    return res.data
 
 async def get_warehouse(wid: int) -> dict | None:
-    return await _fetchone("SELECT * FROM warehouses WHERE id = ?", (wid,))
-
+    client = await get_supabase()
+    res = await client.table("warehouses").select("*").eq("id", wid).execute()
+    return res.data[0] if res.data else None
 
 async def create_warehouse(data: dict) -> int:
-    return await _execute("""
-        INSERT INTO warehouses
-            (name, city, region, lat, lng, capacity_units, has_cold_storage,
-             transport_time_days, contact_person, contact_phone)
-        VALUES (:name,:city,:region,:lat,:lng,:capacity_units,:has_cold_storage,
-                :transport_time_days,:contact_person,:contact_phone)
-    """, data)  # type: ignore[arg-type]
-
+    client = await get_supabase()
+    # Fix types for Postgres
+    if "transport_time_days" in data:
+        data["transport_time_days"] = int(data["transport_time_days"])
+    if "has_cold_storage" in data:
+        data["has_cold_storage"] = bool(data["has_cold_storage"])
+        
+    res = await client.table("warehouses").insert(data).execute()
+    return res.data[0]["id"] if res.data else -1
 
 async def update_warehouse(wid: int, data: dict) -> None:
     if not data:
         return
-    fields = ", ".join(f"{k} = :{k}" for k in data)
-    data["id"] = wid
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(f"UPDATE warehouses SET {fields} WHERE id = :id", data)
-        await db.commit()
-
+    client = await get_supabase()
+    await client.table("warehouses").update(data).eq("id", wid).execute()
 
 async def delete_warehouse(wid: int) -> None:
-    await _execute("DELETE FROM warehouses WHERE id = ?", (wid,))
-
+    client = await get_supabase()
+    await client.table("warehouses").delete().eq("id", wid).execute()
 
 # ═══════════════════════════════════════════════════════════════════
 #  INVENTORY BATCHES
@@ -235,138 +92,164 @@ async def delete_warehouse(wid: int) -> None:
 async def get_all_batches(product_id: int | None = None,
                            warehouse_id: int | None = None,
                            include_expired: bool = False) -> list[dict]:
-    where = ["1=1"]
-    params: list = []
+    client = await get_supabase()
+    query = client.table("inventory_batches").select("*, products(name, category, unit, requires_cold_chain), warehouses(name, city, has_cold_storage)")
     if product_id:
-        where.append("b.product_id = ?"); params.append(product_id)
+        query = query.eq("product_id", product_id)
     if warehouse_id:
-        where.append("b.warehouse_id = ?"); params.append(warehouse_id)
+        query = query.eq("warehouse_id", warehouse_id)
     if not include_expired:
-        where.append("b.expiry_date >= date('now')")
-    sql = f"""
-        SELECT b.*,
-               p.name  AS product_name, p.category, p.unit, p.requires_cold_chain,
-               w.name  AS warehouse_name, w.city, w.has_cold_storage,
-               CAST(julianday(b.expiry_date) - julianday('now') AS INTEGER) AS days_until_expiry
-        FROM inventory_batches b
-        JOIN products p ON b.product_id = p.id
-        JOIN warehouses w ON b.warehouse_id = w.id
-        WHERE {' AND '.join(where)}
-        ORDER BY b.expiry_date, p.name
-    """
-    return await _fetchall(sql, tuple(params))
+        query = query.gte("expiry_date", date.today().isoformat())
+    
+    res = await query.execute()
+    
+    batches = []
+    for b in res.data:
+        p = b.get("products", {}) or {}
+        w = b.get("warehouses", {}) or {}
+        
+        days_until = (date.fromisoformat(b["expiry_date"][:10]) - date.today()).days
+        
+        flat = {
+            **b,
+            "product_name": p.get("name"),
+            "category": p.get("category"),
+            "unit": p.get("unit"),
+            "requires_cold_chain": p.get("requires_cold_chain"),
+            "warehouse_name": w.get("name"),
+            "city": w.get("city"),
+            "has_cold_storage": w.get("has_cold_storage"),
+            "days_until_expiry": days_until,
+        }
+        flat.pop("products", None)
+        flat.pop("warehouses", None)
+        batches.append(flat)
+        
+    return sorted(batches, key=lambda x: (x["expiry_date"], x["product_name"] or ""))
 
 
 async def get_batch(bid: int) -> dict | None:
-    return await _fetchone("""
-        SELECT b.*, p.name AS product_name, p.unit,
-               w.name AS warehouse_name
-        FROM inventory_batches b
-        JOIN products p ON b.product_id = p.id
-        JOIN warehouses w ON b.warehouse_id = w.id
-        WHERE b.id = ?
-    """, (bid,))
+    client = await get_supabase()
+    res = await client.table("inventory_batches").select("*, products(name, unit), warehouses(name)").eq("id", bid).execute()
+    if not res.data:
+        return None
+    b = res.data[0]
+    p = b.get("products", {}) or {}
+    w = b.get("warehouses", {}) or {}
+    flat = {
+        **b,
+        "product_name": p.get("name"),
+        "unit": p.get("unit"),
+        "warehouse_name": w.get("name"),
+    }
+    flat.pop("products", None)
+    flat.pop("warehouses", None)
+    return flat
 
 
 async def get_expiring_batches(days: int = 3) -> list[dict]:
-    return await _fetchall("""
-        SELECT b.*,
-               p.name AS product_name, p.category, p.unit,
-               w.name AS warehouse_name, w.city,
-               CAST(julianday(b.expiry_date) - julianday('now') AS INTEGER) AS days_until_expiry
-        FROM inventory_batches b
-        JOIN products p ON b.product_id = p.id
-        JOIN warehouses w ON b.warehouse_id = w.id
-        WHERE b.expiry_date >= date('now')
-          AND b.expiry_date <= date('now', ?)
-          AND b.quantity > 0
-        ORDER BY b.expiry_date, p.name
-    """, (f"+{days} days",))
+    client = await get_supabase()
+    target_date = (date.today() + timedelta(days=days)).isoformat()
+    today_date = date.today().isoformat()
+    res = await client.table("inventory_batches").select("*, products(name, category, unit), warehouses(name, city)").gte("expiry_date", today_date).lte("expiry_date", target_date).gt("quantity", 0).order("expiry_date").execute()
+    
+    batches = []
+    for b in res.data:
+        p = b.get("products", {}) or {}
+        w = b.get("warehouses", {}) or {}
+        days_until = (date.fromisoformat(b["expiry_date"][:10]) - date.today()).days
+        flat = {
+            **b,
+            "product_name": p.get("name"),
+            "category": p.get("category"),
+            "unit": p.get("unit"),
+            "warehouse_name": w.get("name"),
+            "city": w.get("city"),
+            "days_until_expiry": days_until,
+        }
+        flat.pop("products", None)
+        flat.pop("warehouses", None)
+        batches.append(flat)
+    return sorted(batches, key=lambda x: (x["expiry_date"], x["product_name"] or ""))
 
 
 async def get_inventory_summary() -> list[dict]:
-    """Aggregate active stock per (product, warehouse) with expiry info."""
-    return await _fetchall("""
-        SELECT
-            p.id   AS product_id,
-            p.name AS product_name,
-            p.category,
-            p.unit,
-            p.requires_cold_chain,
-            p.cost_per_unit AS product_cost,
-            p.default_shelf_days,
-            p.default_daily_demand,
-            p.supplier_lead_days,
-            p.reorder_qty,
-            w.id   AS warehouse_id,
-            w.name AS warehouse_name,
-            w.city,
-            w.region,
-            w.has_cold_storage,
-            w.capacity_units,
-            w.transport_time_days,
-            COALESCE(SUM(CASE WHEN b.expiry_date >= date('now') AND b.quantity > 0
-                              THEN b.quantity ELSE 0 END), 0) AS total_quantity,
-            MIN(CASE WHEN b.expiry_date >= date('now') AND b.quantity > 0
-                     THEN b.expiry_date END) AS earliest_expiry,
-            COUNT(CASE WHEN b.expiry_date >= date('now') AND b.quantity > 0
-                       THEN 1 END) AS active_batch_count
-        FROM inventory_batches b
-        JOIN products  p ON b.product_id  = p.id
-        JOIN warehouses w ON b.warehouse_id = w.id
-        GROUP BY p.id, w.id
-        HAVING total_quantity > 0
-        ORDER BY p.name, w.name
-    """)
+    client = await get_supabase()
+    today_date = date.today().isoformat()
+    res = await client.table("inventory_batches").select("*, products(*), warehouses(*)").gte("expiry_date", today_date).gt("quantity", 0).execute()
+    
+    summary = {}
+    for b in res.data:
+        p = b.get("products", {}) or {}
+        w = b.get("warehouses", {}) or {}
+        key = (b["product_id"], b["warehouse_id"])
+        if key not in summary:
+            summary[key] = {
+                "product_id": p.get("id"),
+                "product_name": p.get("name"),
+                "category": p.get("category"),
+                "unit": p.get("unit"),
+                "requires_cold_chain": p.get("requires_cold_chain"),
+                "product_cost": p.get("cost_per_unit"),
+                "default_shelf_days": p.get("default_shelf_days"),
+                "default_daily_demand": p.get("default_daily_demand"),
+                "supplier_lead_days": p.get("supplier_lead_days"),
+                "reorder_qty": p.get("reorder_qty"),
+                "warehouse_id": w.get("id"),
+                "warehouse_name": w.get("name"),
+                "city": w.get("city"),
+                "region": w.get("region"),
+                "has_cold_storage": w.get("has_cold_storage"),
+                "capacity_units": w.get("capacity_units"),
+                "transport_time_days": w.get("transport_time_days"),
+                "total_quantity": 0.0,
+                "earliest_expiry": None,
+                "active_batch_count": 0
+            }
+        
+        s = summary[key]
+        s["total_quantity"] += b["quantity"]
+        s["active_batch_count"] += 1
+        
+        exp = b["expiry_date"]
+        if not s["earliest_expiry"] or exp < s["earliest_expiry"]:
+            s["earliest_expiry"] = exp
+
+    res_list = list(summary.values())
+    res_list.sort(key=lambda x: (x["product_name"] or "", x["warehouse_name"] or ""))
+    return res_list
 
 
 async def create_batch(data: dict) -> int:
-    return await _execute("""
-        INSERT INTO inventory_batches
-            (product_id, warehouse_id, batch_no, quantity,
-             manufacture_date, expiry_date, cost_per_unit, received_date, notes)
-        VALUES (:product_id,:warehouse_id,:batch_no,:quantity,
-                :manufacture_date,:expiry_date,:cost_per_unit,:received_date,:notes)
-    """, data)  # type: ignore[arg-type]
+    client = await get_supabase()
+    res = await client.table("inventory_batches").insert(data).execute()
+    return res.data[0]["id"]
 
 
 async def update_batch(bid: int, data: dict) -> None:
     if not data:
         return
-    fields = ", ".join(f"{k} = :{k}" for k in data)
-    data["id"] = bid
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(f"UPDATE inventory_batches SET {fields} WHERE id = :id", data)
-        await db.commit()
+    client = await get_supabase()
+    await client.table("inventory_batches").update(data).eq("id", bid).execute()
 
 
 async def delete_batch(bid: int) -> None:
-    await _execute("DELETE FROM inventory_batches WHERE id = ?", (bid,))
+    client = await get_supabase()
+    await client.table("inventory_batches").delete().eq("id", bid).execute()
 
 
 async def reduce_batch_quantities(product_id: int, warehouse_id: int, qty: float) -> None:
-    """Deduct qty from batches at source (FIFO by expiry date)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("""
-            SELECT id, quantity FROM inventory_batches
-            WHERE product_id = ? AND warehouse_id = ? AND quantity > 0
-                  AND expiry_date >= date('now')
-            ORDER BY expiry_date
-        """, (product_id, warehouse_id)) as cur:
-            batches = [dict(r) for r in await cur.fetchall()]
-
-        remaining = qty
-        for b in batches:
-            if remaining <= 0:
-                break
-            deduct = min(b["quantity"], remaining)
-            await db.execute(
-                "UPDATE inventory_batches SET quantity = quantity - ? WHERE id = ?",
-                (deduct, b["id"])
-            )
-            remaining -= deduct
-        await db.commit()
+    client = await get_supabase()
+    today = date.today().isoformat()
+    res = await client.table("inventory_batches").select("id, quantity").eq("product_id", product_id).eq("warehouse_id", warehouse_id).gt("quantity", 0).gte("expiry_date", today).order("expiry_date").execute()
+    
+    remaining = qty
+    for b in res.data:
+        if remaining <= 0:
+            break
+        deduct = min(b["quantity"], remaining)
+        await client.table("inventory_batches").update({"quantity": b["quantity"] - deduct}).eq("id", b["id"]).execute()
+        remaining -= deduct
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -376,66 +259,85 @@ async def reduce_batch_quantities(product_id: int, warehouse_id: int, qty: float
 async def get_demand_history(product_id: int | None = None,
                               warehouse_id: int | None = None,
                               days: int = 14) -> list[dict]:
-    where = ["dh.date >= date('now', ?)"]
-    params: list = [f"-{days} days"]
+    client = await get_supabase()
+    date_limit = (date.today() - timedelta(days=days)).isoformat()
+    query = client.table("demand_history").select("*, products(name), warehouses(name)").gte("date", date_limit)
     if product_id:
-        where.append("dh.product_id = ?"); params.append(product_id)
+        query = query.eq("product_id", product_id)
     if warehouse_id:
-        where.append("dh.warehouse_id = ?"); params.append(warehouse_id)
-    return await _fetchall(f"""
-        SELECT dh.*, p.name AS product_name, w.name AS warehouse_name
-        FROM demand_history dh
-        JOIN products p ON dh.product_id = p.id
-        JOIN warehouses w ON dh.warehouse_id = w.id
-        WHERE {' AND '.join(where)}
-        ORDER BY dh.date DESC
-    """, tuple(params))
+        query = query.eq("warehouse_id", warehouse_id)
+    
+    res = await query.order("date", desc=True).execute()
+    
+    history = []
+    for dh in res.data:
+        p = dh.get("products", {}) or {}
+        w = dh.get("warehouses", {}) or {}
+        flat = {
+            **dh,
+            "product_name": p.get("name"),
+            "warehouse_name": w.get("name"),
+        }
+        flat.pop("products", None)
+        flat.pop("warehouses", None)
+        history.append(flat)
+    return history
 
 
 async def upsert_demand_record(product_id: int, warehouse_id: int,
                                 record_date: str, qty: float,
                                 is_manual: bool = False) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO demand_history (product_id, warehouse_id, date, quantity_sold, is_manual_override)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(product_id, warehouse_id, date)
-            DO UPDATE SET quantity_sold = excluded.quantity_sold,
-                          is_manual_override = excluded.is_manual_override
-        """, (product_id, warehouse_id, record_date, qty, int(is_manual)))
-        await db.commit()
+    client = await get_supabase()
+    data = {
+        "product_id": product_id,
+        "warehouse_id": warehouse_id,
+        "date": record_date,
+        "quantity_sold": qty,
+        "is_manual_override": int(is_manual)
+    }
+    await client.table("demand_history").upsert(data).execute()
 
 
 async def get_demand_config(product_id: int, warehouse_id: int) -> dict | None:
-    return await _fetchone(
-        "SELECT * FROM demand_config WHERE product_id = ? AND warehouse_id = ?",
-        (product_id, warehouse_id)
-    )
+    client = await get_supabase()
+    res = await client.table("demand_config").select("*").eq("product_id", product_id).eq("warehouse_id", warehouse_id).execute()
+    return res.data[0] if res.data else None
 
 
 async def set_demand_config(product_id: int, warehouse_id: int, value: float | None) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO demand_config (product_id, warehouse_id, manual_daily_demand, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(product_id, warehouse_id)
-            DO UPDATE SET manual_daily_demand = excluded.manual_daily_demand,
-                          updated_at = datetime('now')
-        """, (product_id, warehouse_id, value))
-        await db.commit()
+    from datetime import datetime
+    client = await get_supabase()
+    data = {
+        "product_id": product_id,
+        "warehouse_id": warehouse_id,
+        "manual_daily_demand": value,
+        "updated_at": datetime.now().isoformat()
+    }
+    await client.table("demand_config").upsert(data).execute()
 
 
 async def get_avg_demand(product_id: int, warehouse_id: int) -> float | None:
-    """Returns manual override if set, else 14-day rolling average from history."""
     cfg = await get_demand_config(product_id, warehouse_id)
     if cfg and cfg.get("manual_daily_demand") is not None:
         return cfg["manual_daily_demand"]
-    row = await _fetchone("""
-        SELECT AVG(quantity_sold) AS avg_demand
-        FROM demand_history
-        WHERE product_id = ? AND warehouse_id = ? AND date >= date('now', '-14 days')
-    """, (product_id, warehouse_id))
-    return row["avg_demand"] if row else None
+        
+    client = await get_supabase()
+    date_limit = (date.today() - timedelta(days=60)).isoformat() # Use 60 days of history for ML
+    res = await client.table("demand_history").select("date, quantity_sold").eq("product_id", product_id).eq("warehouse_id", warehouse_id).gte("date", date_limit).execute()
+    
+    if not res.data:
+        return None
+        
+    try:
+        from .ml_forecaster import train_and_predict_demand
+        # Predict demand for tomorrow
+        target_date = (date.today() + timedelta(days=1)).isoformat()
+        ml_prediction = train_and_predict_demand(res.data, target_date)
+        return ml_prediction
+    except Exception as e:
+        print(f"ML Forecast Failed: {e}. Falling back to SMA.")
+        total = sum(r["quantity_sold"] for r in res.data)
+        return total / len(res.data)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -443,33 +345,48 @@ async def get_avg_demand(product_id: int, warehouse_id: int) -> float | None:
 # ═══════════════════════════════════════════════════════════════════
 
 async def get_recommendations(status: str | None = None) -> list[dict]:
-    where = "1=1"
-    params: tuple = ()
+    client = await get_supabase()
+    query = client.table("agent_recommendations").select("*, products(name, unit, category), from_warehouse:from_warehouse_id(name, city), to_warehouse:to_warehouse_id(name, city)")
     if status:
-        where = "r.status = ?"
-        params = (status,)
-    rows = await _fetchall(f"""
-        SELECT r.*,
-               p.name  AS product_name, p.unit, p.category,
-               fw.name AS from_warehouse_name, fw.city AS from_city,
-               tw.name AS to_warehouse_name,   tw.city AS to_city
-        FROM agent_recommendations r
-        LEFT JOIN products   p  ON r.product_id       = p.id
-        LEFT JOIN warehouses fw ON r.from_warehouse_id = fw.id
-        LEFT JOIN warehouses tw ON r.to_warehouse_id   = tw.id
-        WHERE {where}
-        ORDER BY
-            CASE r.urgency WHEN 'critical' THEN 1 WHEN 'high' THEN 2
-                           WHEN 'medium' THEN 3 ELSE 4 END,
-            r.created_at DESC
-    """, params)
-    for r in rows:
-        if r.get("detail_json"):
+        query = query.eq("status", status)
+        
+    res = await query.execute()
+    
+    recs = []
+    urgency_map = {"critical": 1, "high": 2, "medium": 3}
+    for r in res.data:
+        p = r.get("products", {}) or {}
+        fw = r.get("from_warehouse", {}) or {}
+        tw = r.get("to_warehouse", {}) or {}
+        
+        flat = {
+            **r,
+            "product_name": p.get("name"),
+            "unit": p.get("unit"),
+            "category": p.get("category"),
+            "from_warehouse_name": fw.get("name"),
+            "from_city": fw.get("city"),
+            "to_warehouse_name": tw.get("name"),
+            "to_city": tw.get("city"),
+        }
+        flat.pop("products", None)
+        flat.pop("from_warehouse", None)
+        flat.pop("to_warehouse", None)
+        
+        if flat.get("detail_json"):
             try:
-                r["detail"] = json.loads(r["detail_json"])
+                flat["detail"] = json.loads(flat["detail_json"])
             except Exception:
-                r["detail"] = {}
-    return rows
+                flat["detail"] = {}
+        else:
+            flat["detail"] = {}
+            
+        recs.append(flat)
+        
+    recs.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    recs.sort(key=lambda x: urgency_map.get(x.get("urgency", ""), 4))
+    
+    return recs
 
 
 async def get_recommendation(rid: int) -> dict | None:
@@ -478,35 +395,26 @@ async def get_recommendation(rid: int) -> dict | None:
 
 
 async def create_recommendation(data: dict) -> int:
+    client = await get_supabase()
     detail = data.pop("detail", {})
     data["detail_json"] = json.dumps(detail)
-    return await _execute("""
-        INSERT INTO agent_recommendations
-            (product_id, from_warehouse_id, to_warehouse_id, action_type, urgency,
-             quantity, estimated_saving, estimated_cost, detail_json, status)
-        VALUES (:product_id,:from_warehouse_id,:to_warehouse_id,:action_type,:urgency,
-                :quantity,:estimated_saving,:estimated_cost,:detail_json,:status)
-    """, data)  # type: ignore[arg-type]
+    res = await client.table("agent_recommendations").insert(data).execute()
+    return res.data[0]["id"]
 
 
 async def resolve_recommendation(rid: int, status: str, reason: str | None = None) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            UPDATE agent_recommendations
-               SET status = ?, rejection_reason = ?, resolved_at = datetime('now')
-             WHERE id = ?
-        """, (status, reason, rid))
-        await db.commit()
+    from datetime import datetime
+    client = await get_supabase()
+    await client.table("agent_recommendations").update({
+        "status": status,
+        "rejection_reason": reason,
+        "resolved_at": datetime.now().isoformat()
+    }).eq("id", rid).execute()
 
 
 async def expire_old_recommendations() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            UPDATE agent_recommendations
-               SET status = 'expired'
-             WHERE status = 'pending'
-        """)
-        await db.commit()
+    client = await get_supabase()
+    await client.table("agent_recommendations").update({"status": "expired"}).eq("status", "pending").execute()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -515,24 +423,37 @@ async def expire_old_recommendations() -> None:
 
 async def get_operations(op_type: str | None = None,
                           status: str | None = None) -> list[dict]:
-    where = ["1=1"]
-    params: list = []
+    client = await get_supabase()
+    query = client.table("operations").select("*, products(name, unit, category), from_warehouse:from_warehouse_id(name, city), to_warehouse:to_warehouse_id(name, city)")
     if op_type:
-        where.append("o.op_type = ?"); params.append(op_type)
+        query = query.eq("op_type", op_type)
     if status:
-        where.append("o.status = ?"); params.append(status)
-    return await _fetchall(f"""
-        SELECT o.*,
-               p.name  AS product_name, p.unit, p.category,
-               fw.name AS from_warehouse_name, fw.city AS from_city,
-               tw.name AS to_warehouse_name,   tw.city AS to_city
-        FROM operations o
-        LEFT JOIN products   p  ON o.product_id       = p.id
-        LEFT JOIN warehouses fw ON o.from_warehouse_id = fw.id
-        LEFT JOIN warehouses tw ON o.to_warehouse_id   = tw.id
-        WHERE {' AND '.join(where)}
-        ORDER BY o.created_at DESC
-    """, tuple(params))
+        query = query.eq("status", status)
+    
+    res = await query.order("created_at", desc=True).execute()
+    
+    ops = []
+    for o in res.data:
+        p = o.get("products", {}) or {}
+        fw = o.get("from_warehouse", {}) or {}
+        tw = o.get("to_warehouse", {}) or {}
+        
+        flat = {
+            **o,
+            "product_name": p.get("name"),
+            "unit": p.get("unit"),
+            "category": p.get("category"),
+            "from_warehouse_name": fw.get("name"),
+            "from_city": fw.get("city"),
+            "to_warehouse_name": tw.get("name"),
+            "to_city": tw.get("city"),
+        }
+        flat.pop("products", None)
+        flat.pop("from_warehouse", None)
+        flat.pop("to_warehouse", None)
+        ops.append(flat)
+        
+    return ops
 
 
 async def get_operation(oid: int) -> dict | None:
@@ -541,77 +462,63 @@ async def get_operation(oid: int) -> dict | None:
 
 
 async def create_operation(data: dict) -> int:
-    return await _execute("""
-        INSERT INTO operations
-            (recommendation_id, op_type, product_id, from_warehouse_id, to_warehouse_id,
-             quantity, status, scheduled_date, estimated_cost, notes)
-        VALUES (:recommendation_id,:op_type,:product_id,:from_warehouse_id,:to_warehouse_id,
-                :quantity,:status,:scheduled_date,:estimated_cost,:notes)
-    """, data)  # type: ignore[arg-type]
+    client = await get_supabase()
+    res = await client.table("operations").insert(data).execute()
+    return res.data[0]["id"]
 
 
 async def advance_operation_status(oid: int, new_status: str,
                                     actual_cost: float | None = None) -> None:
-    """Update status; on 'completed' transfer, deduct source and create dest batch."""
     op = await get_operation(oid)
     if not op:
         return
+        
+    client = await get_supabase()
+    update_data = {"status": new_status}
+    if actual_cost is not None:
+        update_data["actual_cost"] = actual_cost
+    if new_status == 'completed':
+        update_data["completed_date"] = date.today().isoformat()
+        
+    await client.table("operations").update(update_data).eq("id", oid).execute()
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            UPDATE operations SET status = ?, actual_cost = ?,
-                   completed_date = CASE WHEN ? = 'completed' THEN date('now') ELSE completed_date END
-            WHERE id = ?
-        """, (new_status, actual_cost, new_status, oid))
-        await db.commit()
-
-    # When a transfer is completed: deduct from source, add to dest
     if new_status == "completed" and op["op_type"] == "transfer":
-        pid  = op["product_id"]
+        pid = op["product_id"]
         fwid = op["from_warehouse_id"]
         twid = op["to_warehouse_id"]
-        qty  = op["quantity"]
+        qty = op["quantity"]
 
         await reduce_batch_quantities(pid, fwid, qty)
 
-        # Fetch source batch details for expiry reference
-        src_batch = await _fetchone("""
-            SELECT MIN(expiry_date) AS expiry FROM inventory_batches
-            WHERE product_id = ? AND warehouse_id = ? AND quantity > 0
-              AND expiry_date >= date('now')
-        """, (pid, fwid))
-        expiry = src_batch["expiry"] if src_batch and src_batch["expiry"] else \
-                 (date.today() + timedelta(days=7)).isoformat()
-
+        today = date.today().isoformat()
+        res = await client.table("inventory_batches").select("expiry_date").eq("product_id", pid).eq("warehouse_id", fwid).gt("quantity", 0).gte("expiry_date", today).order("expiry_date").execute()
+        
+        expiry = res.data[0]["expiry_date"] if res.data else (date.today() + timedelta(days=7)).isoformat()
+        
         product = await get_product(pid)
         cost = product["cost_per_unit"] if product else 0
 
-        # Check for existing identical batch
-        existing = await _fetchone("""
-            SELECT id FROM inventory_batches
-            WHERE product_id = ? AND warehouse_id = ? AND expiry_date = ? AND cost_per_unit = ?
-        """, (pid, twid, expiry, cost))
+        existing_res = await client.table("inventory_batches").select("id, quantity, notes").eq("product_id", pid).eq("warehouse_id", twid).eq("expiry_date", expiry).eq("cost_per_unit", cost).execute()
 
-        if existing:
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("""
-                    UPDATE inventory_batches
-                    SET quantity = quantity + ?,
-                        notes = COALESCE(notes || ' | ', '') || ?
-                    WHERE id = ?
-                """, (qty, f"Transferred via Op #{oid}", existing["id"]))
-                await db.commit()
+        if existing_res.data:
+            existing = existing_res.data[0]
+            old_notes = existing.get("notes") or ""
+            new_notes = f"{old_notes} | Transferred via Op #{oid}" if old_notes else f"Transferred via Op #{oid}"
+            await client.table("inventory_batches").update({
+                "quantity": existing["quantity"] + qty,
+                "notes": new_notes
+            }).eq("id", existing["id"]).execute()
         else:
             await create_batch({
-                "product_id":       pid,
-                "warehouse_id":     twid,
-                "batch_no":         f"TRF-{oid:04d}",
-                "quantity":         qty,
+                "product_id": pid,
+                "warehouse_id": twid,
+                "batch_no": f"TRF-{oid:04d}",
+                "quantity": qty,
                 "manufacture_date": None,
-                "expiry_date":      expiry,
-                "cost_per_unit":    cost,
-                "received_date":    date.today().isoformat(),
-                "notes":            f"Transferred via Operation #{oid}",
+                "expiry_date": expiry,
+                "cost_per_unit": cost,
+                "received_date": today,
+                "notes": f"Transferred via Operation #{oid}",
             })
 
 
@@ -620,27 +527,22 @@ async def advance_operation_status(oid: int, new_status: str,
 # ═══════════════════════════════════════════════════════════════════
 
 async def get_dashboard_kpis() -> dict:
-    total_batches = (await _fetchone(
-        "SELECT COUNT(*) AS n FROM inventory_batches WHERE quantity > 0 AND expiry_date >= date('now')"
-    ) or {}).get("n", 0)
-
-    expiring_3 = (await _fetchone(
-        "SELECT COUNT(*) AS n FROM inventory_batches WHERE quantity > 0 "
-        "AND expiry_date >= date('now') AND expiry_date <= date('now', '+3 days')"
-    ) or {}).get("n", 0)
-
-    pending_recs = (await _fetchone(
-        "SELECT COUNT(*) AS n FROM agent_recommendations WHERE status = 'pending'"
-    ) or {}).get("n", 0)
-
-    savings = (await _fetchone(
-        "SELECT COALESCE(SUM(estimated_saving), 0) AS s FROM agent_recommendations WHERE status = 'accepted'"
-    ) or {}).get("s", 0)
-
-    active_ops = (await _fetchone(
-        "SELECT COUNT(*) AS n FROM operations WHERE status IN ('planned','in_transit')"
-    ) or {}).get("n", 0)
-
+    client = await get_supabase()
+    today = date.today().isoformat()
+    
+    batches_res = await client.table("inventory_batches").select("id, expiry_date").gt("quantity", 0).gte("expiry_date", today).execute()
+    total_batches = len(batches_res.data)
+    
+    in_3_days = (date.today() + timedelta(days=3)).isoformat()
+    expiring_3 = sum(1 for b in batches_res.data if b["expiry_date"] <= in_3_days)
+    
+    recs_res = await client.table("agent_recommendations").select("status, estimated_saving").execute()
+    pending_recs = sum(1 for r in recs_res.data if r.get("status") == "pending")
+    savings = sum(r.get("estimated_saving") or 0 for r in recs_res.data if r.get("status") == "accepted")
+    
+    ops_res = await client.table("operations").select("status").in_("status", ["planned", "in_transit"]).execute()
+    active_ops = len(ops_res.data)
+    
     return {
         "total_active_batches": total_batches,
         "expiring_within_3_days": expiring_3,

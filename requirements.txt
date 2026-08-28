@@ -1,4 +1,7 @@
-fastapi
+﻿fastapi
 uvicorn[standard]
 aiosqlite
 pydantic
+supabase==2.3.4
+
+

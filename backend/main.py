@@ -41,7 +41,8 @@ FRONTEND = Path(__file__).parent.parent / "frontend"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.init_db()
+    # Supabase handles its own connection/init
+    pass
     # Seed only if empty
     existing = await db.get_all_products()
     if not existing:
