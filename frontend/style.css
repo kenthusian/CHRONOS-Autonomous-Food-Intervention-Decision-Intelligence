@@ -480,7 +480,7 @@ table.data-table {
 .rec-card {
   background: var(--bg-card);
   
-  -webkit-
+
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 24px;
@@ -580,7 +580,7 @@ tr.row-high     { background: rgba(249,115,22,0.04); }
 .wh-card {
   background: var(--bg-card);
   
-  -webkit-
+
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 24px;
@@ -610,8 +610,6 @@ tr.row-high     { background: rgba(249,115,22,0.04); }
 .modal-overlay {
   position: fixed; inset: 0;
   background: rgba(3,5,9,0.7);
-  
-  -webkit-
   display: none;
   align-items: center; justify-content: center;
   z-index: 1000;
