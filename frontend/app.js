@@ -26,9 +26,11 @@ function toast(msg, type = 'info', duration = 3500) {
   const tc = document.getElementById('toast-container');
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  const icons = { success: '✓', error: '✕', info: 'ℹ' };
-  el.innerHTML = `<span style="font-size:16px">${icons[type] || '•'}</span><span>${msg}</span>`;
+  const icons = { success: 'check-circle', error: 'x-circle', info: 'info' };
+  const icon = icons[type] || 'info';
+  el.innerHTML = `<i data-feather="${icon}" style="width:16px;height:16px;"></i><span>${msg}</span>`;
   tc.appendChild(el);
+  if (window.feather) feather.replace();
   setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(30px)';
     el.style.transition = '0.3s'; setTimeout(() => el.remove(), 300); }, duration);
 }
@@ -107,10 +109,10 @@ function daysFromNow(dateStr) {
 function expiryPill(days) {
   if (days === null) return '<span class="text-muted">—</span>';
   if (days < 0)  return `<span class="expiry-pill es">Expired</span>`;
-  if (days <= 2) return `<span class="expiry-pill ec">🔴 ${days}d</span>`;
-  if (days <= 5) return `<span class="expiry-pill eh">🟠 ${days}d</span>`;
-  if (days <= 10) return `<span class="expiry-pill em">🟡 ${days}d</span>`;
-  return `<span class="expiry-pill el">🟢 ${days}d</span>`;
+  if (days <= 2) return `<span class="expiry-pill ec">${days}d</span>`;
+  if (days <= 5) return `<span class="expiry-pill eh">${days}d</span>`;
+  if (days <= 10) return `<span class="expiry-pill em">${days}d</span>`;
+  return `<span class="expiry-pill el">${days}d</span>`;
 }
 function rowClass(days) {
   if (days <= 2) return 'row-critical';
@@ -122,16 +124,16 @@ function badge(type, label) {
 }
 function actionBadge(type) {
   const labels = {
-    redistribute:  '⇄ Redistribute',
-    discount:      '% Discount',
-    reorder:       '↑ Reorder',
-    priority_ship: '⚡ Priority Ship',
-    hold:          '◉ Hold',
+    redistribute:  '<i data-feather="repeat" style="width:12px;height:12px"></i> Redistribute',
+    discount:      '<i data-feather="tag" style="width:12px;height:12px"></i> Discount',
+    reorder:       '<i data-feather="shopping-cart" style="width:12px;height:12px"></i> Reorder',
+    priority_ship: '<i data-feather="zap" style="width:12px;height:12px"></i> Priority Ship',
+    hold:          '<i data-feather="pause-circle" style="width:12px;height:12px"></i> Hold',
   };
   return badge(type, labels[type] || type);
 }
 function urgencyBadge(u) {
-  const labels = { critical: '🔴 Critical', high: '🟠 High', medium: '🟡 Medium', low: '🟢 Low' };
+  const labels = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
   return badge(u, labels[u] || u);
 }
 
@@ -168,11 +170,11 @@ async function renderDashboard() {
 
   // KPI color map
   const kpiDefs = [
-    { label: 'Active Batches',     value: kpis.total_active_batches,     sub: 'Non-expired lots',         icon: '▦', color: '#3b82f6' },
-    { label: 'Expiring ≤ 3 Days',  value: kpis.expiring_within_3_days,   sub: 'Require immediate action', icon: '⏰', color: kpis.expiring_within_3_days > 0 ? '#ef4444' : '#22c55e' },
-    { label: 'Pending Actions',    value: kpis.pending_recommendations,   sub: 'AI recommendations',       icon: '◎', color: '#8b5cf6' },
-    { label: 'Savings Unlocked',   value: fmtCur(kpis.estimated_savings_unlocked), sub: 'From accepted recs', icon: '₹', color: '#22c55e', raw: true },
-    { label: 'Active Operations',  value: kpis.active_operations,        sub: 'In-flight planned actions', icon: '⟳', color: '#f97316' },
+    { label: 'Active Batches',     value: kpis.total_active_batches,     sub: 'Non-expired lots',         icon: '<i data-feather="box"></i>', color: '#3b82f6' },
+    { label: 'Expiring ≤ 3 Days',  value: kpis.expiring_within_3_days,   sub: 'Require immediate action', icon: '<i data-feather="clock"></i>', color: kpis.expiring_within_3_days > 0 ? '#ef4444' : '#22c55e' },
+    { label: 'Pending Actions',    value: kpis.pending_recommendations,   sub: 'AI recommendations',       icon: '<i data-feather="cpu"></i>', color: '#8b5cf6' },
+    { label: 'Savings Unlocked',   value: fmtCur(kpis.estimated_savings_unlocked), sub: 'From accepted recs', icon: '<i data-feather="dollar-sign"></i>', color: '#22c55e', raw: true },
+    { label: 'Active Operations',  value: kpis.active_operations,        sub: 'In-flight planned actions', icon: '<i data-feather="refresh-cw"></i>', color: '#f97316' },
   ];
 
   const kpiHTML = kpiDefs.map(k => `
@@ -199,7 +201,7 @@ async function renderDashboard() {
           ${expiryPill(days)}
         </div>
       </div>`;
-  }).join('') : '<div style="padding:20px;color:var(--text-muted);text-align:center">No batches expiring within 7 days 🎉</div>';
+  }).join('') : '<div style="padding:20px;color:var(--text-muted);text-align:center">No batches expiring within 7 days</div>';
 
   // Pending recommendations preview
   const recPreview = recs.slice(0, 4).map(r => {
@@ -228,7 +230,7 @@ async function renderDashboard() {
           Autopilot Agent
         </label>
         <button class="btn btn-ai btn-lg" onclick="runAnalysisFromDashboard(this)">
-          ◎ Run AI Analysis
+          <i data-feather="play-circle" style="width:16px;height:16px;margin-right:4px;"></i> Run AI Analysis
         </button>
       </div>
     </div>
@@ -238,7 +240,7 @@ async function renderDashboard() {
       <div class="two-col" style="gap:16px">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">⏰ Expiry Alerts</div>
+            <div class="card-title" style="display:flex;align-items:center;gap:6px;"><i data-feather="clock" style="width:16px;height:16px;"></i> Expiry Alerts</div>
             <div class="card-count">Next 7 days · ${expiring.length} batch${expiring.length!==1?'es':''}</div>
           </div>
           <div class="alert-strip">${alertHTML}</div>
@@ -246,7 +248,7 @@ async function renderDashboard() {
 
         <div class="card">
           <div class="card-header">
-            <div class="card-title">◎ Pending AI Recommendations</div>
+            <div class="card-title" style="display:flex;align-items:center;gap:6px;"><i data-feather="cpu" style="width:16px;height:16px;"></i> Pending AI Recommendations</div>
             <div class="card-count">${recs.length} pending</div>
           </div>
           ${recs.length ? `
@@ -259,7 +261,7 @@ async function renderDashboard() {
               </table>
             </div>
           ` : `<div style="padding:32px;text-align:center;color:var(--text-muted)">
-            <div style="font-size:32px;margin-bottom:10px">◎</div>
+            <div style="font-size:32px;margin-bottom:10px;display:flex;justify-content:center;"><i data-feather="check-circle" style="width:32px;height:32px"></i></div>
             No pending recommendations.<br>Click <strong>Run AI Analysis</strong> to generate insights.
           </div>`}
         </div>
@@ -267,7 +269,7 @@ async function renderDashboard() {
       
       <div class="card" style="margin-top: 16px;">
         <div class="card-header">
-          <div class="card-title">🤖 Agent Activity Feed</div>
+          <div class="card-title" style="display:flex;align-items:center;gap:6px;"><i data-feather="activity" style="width:16px;height:16px;"></i> Agent Activity Feed</div>
           <div class="card-count" id="autopilot-status">${window._autopilotInterval ? 'Active · Monitoring...' : 'Offline'}</div>
         </div>
         <div id="agent-feed" style="background:#0f172a; font-family:monospace; font-size:13px; color:#94a3b8; padding:16px; min-height:150px; max-height:300px; overflow-y:auto; border-radius:0 0 12px 12px; border-top:1px solid var(--border-color);">
@@ -425,7 +427,7 @@ async function renderInventory() {
 }
 
 function buildBatchRows(rows) {
-  if (!rows.length) return `<tr><td colspan="10" class="table-empty"><div class="table-empty-icon">▦</div>No batches found</td></tr>`;
+  if (!rows.length) return `<tr><td colspan="10" class="table-empty"><div class="table-empty-icon"><i data-feather="inbox" style="width:32px;height:32px;"></i></div>No batches found</td></tr>`;
   return rows.map(b => {
     const days = b.days_until_expiry;
     return `<tr class="${rowClass(days)}" data-bid="${b.id}">
@@ -623,7 +625,7 @@ async function renderRecommendations() {
           Agentic Mode (Autopilot)
         </label>
         <button class="btn btn-ai btn-lg" id="run-analysis-btn" onclick="runAnalysis(this)">
-          ◎ Run Analysis
+          <i data-feather="play-circle" style="width:16px;height:16px;margin-right:4px;"></i> Run Analysis
         </button>
       </div>
     </div>
@@ -651,7 +653,7 @@ function switchRecTab(tab) {
 function renderRecCards(recs, tab) {
   if (!recs.length) {
     return `<div style="text-align:center;padding:60px 20px;color:var(--text-muted)">
-      <div style="font-size:48px;margin-bottom:12px">◎</div>
+      <div style="font-size:48px;margin-bottom:12px;display:flex;justify-content:center;"><i data-feather="inbox" style="width:48px;height:48px;"></i></div>
       <div style="font-size:15px;margin-bottom:6px">No ${tab} recommendations</div>
       ${tab === 'pending' ? '<p>Click <strong>Run Analysis</strong> above to generate AI recommendations.</p>' : ''}
     </div>`;
@@ -703,13 +705,13 @@ function buildRecCard(r, tab) {
   let actionsHTML = '';
   if (isPending) {
     actionsHTML = `<div class="rec-actions">
-      <button class="btn btn-success" onclick="acceptRec(${r.id})">✓ Accept</button>
-      <button class="btn btn-danger"  onclick="openRejectRec(${r.id})">✕ Reject</button>
+      <button class="btn btn-success" onclick="acceptRec(${r.id})"><i data-feather="check" style="width:14px;height:14px;margin-right:4px;"></i> Accept</button>
+      <button class="btn btn-danger"  onclick="openRejectRec(${r.id})"><i data-feather="x" style="width:14px;height:14px;margin-right:4px;"></i> Reject</button>
     </div>`;
   } else {
     const label = tab === 'accepted'
-      ? `<div class="rec-resolve-note">${badge('accepted','✓ Accepted')} ${r.resolved_at ? '· '+fmtDate(r.resolved_at) : ''}</div>`
-      : `<div class="rec-resolve-note">${badge('rejected','✕ Rejected')} ${r.rejection_reason ? '· "'+r.rejection_reason+'"' : ''}</div>`;
+      ? `<div class="rec-resolve-note">${badge('accepted','<i data-feather="check" style="width:12px;height:12px;margin-right:2px;"></i> Accepted')} ${r.resolved_at ? '· '+fmtDate(r.resolved_at) : ''}</div>`
+      : `<div class="rec-resolve-note">${badge('rejected','<i data-feather="x" style="width:12px;height:12px;margin-right:2px;"></i> Rejected')} ${r.rejection_reason ? '· "'+r.rejection_reason+'"' : ''}</div>`;
     actionsHTML = label;
   }
 

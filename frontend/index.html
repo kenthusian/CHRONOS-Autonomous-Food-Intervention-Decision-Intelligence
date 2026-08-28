@@ -8,13 +8,15 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" />
   <link rel="stylesheet" href="/static/style.css" />
+  <!-- Feather Icons -->
+  <script src="https://unpkg.com/feather-icons"></script>
 </head>
 <body>
 
 <!-- ═══════════════════════════════ SIDEBAR ═══════════════════════ -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">
-    <div class="logo-icon">⬡</div>
+    <div class="logo-icon"><i data-feather="hexagon"></i></div>
     <div>
       <div class="logo-name">ChronosAI</div>
       <div class="logo-sub">Inventory Platform</div>
@@ -23,24 +25,24 @@
 
   <nav class="sidebar-nav" role="navigation" aria-label="Main navigation">
     <a class="nav-item active" href="#dashboard"       id="nav-dashboard">
-      <span class="nav-icon">◈</span> Dashboard
+      <span class="nav-icon"><i data-feather="grid" style="width: 16px; height: 16px;"></i></span> Dashboard
     </a>
     <a class="nav-item" href="#inventory"              id="nav-inventory">
-      <span class="nav-icon">▦</span> Inventory
+      <span class="nav-icon"><i data-feather="box" style="width: 16px; height: 16px;"></i></span> Inventory
     </a>
     <a class="nav-item" href="#recommendations"        id="nav-recommendations">
-      <span class="nav-icon">◎</span> AI Recommendations
+      <span class="nav-icon"><i data-feather="cpu" style="width: 16px; height: 16px;"></i></span> AI Recommendations
       <span class="nav-badge" id="rec-badge" style="display:none"></span>
     </a>
     <a class="nav-item" href="#operations"             id="nav-operations">
-      <span class="nav-icon">⟳</span> Operations
+      <span class="nav-icon"><i data-feather="refresh-cw" style="width: 16px; height: 16px;"></i></span> Operations
     </a>
     <div class="nav-divider"></div>
     <a class="nav-item" href="#products"               id="nav-products">
-      <span class="nav-icon">◻</span> Products
+      <span class="nav-icon"><i data-feather="shopping-bag" style="width: 16px; height: 16px;"></i></span> Products
     </a>
     <a class="nav-item" href="#warehouses"             id="nav-warehouses">
-      <span class="nav-icon">⬡</span> Warehouses
+      <span class="nav-icon"><i data-feather="map-pin" style="width: 16px; height: 16px;"></i></span> Warehouses
     </a>
   </nav>
 
@@ -83,5 +85,15 @@
 <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
 <script src="/static/app.js"></script>
+<script>
+  // Initial feather icon replacement
+  feather.replace();
+  
+  // Re-run feather replacement whenever page content changes
+  const observer = new MutationObserver(function() {
+    feather.replace();
+  });
+  observer.observe(document.getElementById('main-content'), { childList: true, subtree: true });
+</script>
 </body>
 </html>
