@@ -226,7 +226,7 @@ async function renderDashboard() {
       </div>
       <div class="page-actions" style="display:flex; align-items:center; gap: 16px;">
         <label style="display:flex; align-items:center; gap: 8px; font-weight:600; color:var(--text-secondary); cursor:pointer;">
-          <input type="checkbox" id="autopilot-toggle" onchange="toggleAutopilot(this)" style="width:18px;height:18px;" ${window._autopilotInterval ? 'checked' : ''} />
+          <input type="checkbox" id="autopilot-toggle" onchange="toggleAutopilot(this)" ${window._autopilotInterval ? 'checked' : ''} />
           Autopilot Agent
         </label>
         <button class="btn btn-ai btn-lg" onclick="runAnalysisFromDashboard(this)">
@@ -272,7 +272,7 @@ async function renderDashboard() {
           <div class="card-title" style="display:flex;align-items:center;gap:6px;"><i data-feather="activity" style="width:16px;height:16px;"></i> Agent Activity Feed</div>
           <div class="card-count" id="autopilot-status">${window._autopilotInterval ? 'Active · Monitoring...' : 'Offline'}</div>
         </div>
-        <div id="agent-feed" style="background:#0f172a; font-family:monospace; font-size:13px; color:#94a3b8; padding:16px; min-height:150px; max-height:300px; overflow-y:auto; border-radius:0 0 12px 12px; border-top:1px solid var(--border-color);">
+        <div id="agent-feed" style="background:var(--bg-card); font-size:13px; color:var(--text-secondary); padding:16px 24px; min-height:150px; max-height:300px; overflow-y:auto; border-radius:0 0 var(--radius-lg) var(--radius-lg); border-top:1px solid var(--border);">
           ${window._agentLogs ? window._agentLogs.join('<br><br>') : '> Agent offline. Turn on Autopilot to begin autonomous management.'}
         </div>
       </div>
@@ -329,17 +329,17 @@ async function runAutopilotLoop() {
         if (log.action === 'none') {
             window._agentLogs.push(`> Checked inventory. No critical actions needed.`);
         } else if (log.action === 'error') {
-            window._agentLogs.push(`<span style="color:#ef4444">Error: ${log.thought}</span>`);
+            window._agentLogs.push(`<span style="color:var(--critical)">Error: ${log.thought}</span>`);
         } else if (log.action === 'info') {
-            window._agentLogs.push(`<span style="color:#eab308">Info:</span> ${log.thought}`);
+            window._agentLogs.push(`<span style="color:var(--medium)">Info:</span> ${log.thought}`);
         } else {
             hasAction = true;
-            window._agentLogs.push(`<span style="color:#22c55e">Action:</span> ${log.action}<br><span style="color:#64748b">Thought: ${log.thought}</span>`);
+            window._agentLogs.push(`<span style="color:var(--low)">Action:</span> ${log.action}<br><span style="color:var(--text-muted)">Thought: ${log.thought}</span>`);
         }
       }
     }
   } catch (e) {
-    window._agentLogs.push(`<span style="color:#ef4444">Error: ${e.message}</span>`);
+    window._agentLogs.push(`<span style="color:var(--critical)">Error: ${e.message}</span>`);
   }
   
   if (feed) {
@@ -621,7 +621,7 @@ async function renderRecommendations() {
       </div>
       <div class="page-actions" style="display:flex; align-items:center; gap: 16px;">
         <label style="display:flex; align-items:center; gap: 8px; font-weight:600; color:var(--text-secondary); cursor:pointer;">
-          <input type="checkbox" id="autopilot-toggle" onchange="toggleAutopilot(this)" style="width:18px;height:18px;" ${window._autopilotInterval ? 'checked' : ''} />
+          <input type="checkbox" id="autopilot-toggle" onchange="toggleAutopilot(this)" ${window._autopilotInterval ? 'checked' : ''} />
           Agentic Mode (Autopilot)
         </label>
         <button class="btn btn-ai btn-lg" id="run-analysis-btn" onclick="runAnalysis(this)">
