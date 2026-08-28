@@ -1,4 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════
+﻿/* ═══════════════════════════════════════════════════════════════
    ChronosAI — SPA Application
    REST-first, no WebSocket. Each page fetches from the API.
    ═══════════════════════════════════════════════════════════════ */
@@ -722,7 +722,7 @@ function buildRecCard(r, tab, index) {
           ${actionBadge(r.action_type)}
           ${urgencyBadge(r.urgency)}
         </div>
-        <span style="font-size:11px;color:var(--text-muted);font-family:monospace;">#${index}</span>
+        <span style="font-size:11px;color:var(--text-muted)">#${index}</span>
       </div>
       <div>
         <div class="rec-product">${r.product_name || '—'}</div>
@@ -755,7 +755,7 @@ async function runAnalysis(btn) {
 async function acceptRec(rid) {
   try {
     const res = await api(`/api/recommendations/${rid}/accept`, 'PUT');
-    toast(`Recommendation accepted — Operation OP-${(res.operation?.id * 7391).toString(16).toUpperCase().padStart(4, '0')} created`, 'success');
+    toast(`Recommendation accepted — Operation #${res.operation?.id} created`, 'success');
     await updateRecBadge();
     renderRecommendations();
   } catch(e) { toast(e.message, 'error'); }
