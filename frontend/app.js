@@ -658,10 +658,10 @@ function renderRecCards(recs, tab) {
       ${tab === 'pending' ? '<p>Click <strong>Run Analysis</strong> above to generate AI recommendations.</p>' : ''}
     </div>`;
   }
-  return `<div class="rec-grid">${recs.map(r => buildRecCard(r, tab)).join('')}</div>`;
+  return `<div class="rec-grid">${recs.map((r, i) => buildRecCard(r, tab, i + 1)).join('')}</div>`;
 }
 
-function buildRecCard(r, tab) {
+function buildRecCard(r, tab, index) {
   const detail = r.detail || {};
   const isPending = tab === 'pending';
 
@@ -722,7 +722,7 @@ function buildRecCard(r, tab) {
           ${actionBadge(r.action_type)}
           ${urgencyBadge(r.urgency)}
         </div>
-        <span style="font-size:11px;color:var(--text-muted);font-family:monospace;">REC-${(r.id * 8377).toString(16).toUpperCase().padStart(4, '0')}</span>
+        <span style="font-size:11px;color:var(--text-muted);font-family:monospace;">#${index}</span>
       </div>
       <div>
         <div class="rec-product">${r.product_name || '—'}</div>
@@ -835,7 +835,7 @@ async function renderOperations() {
             <th>Qty</th><th>Scheduled</th><th>Est. Cost</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>
-            ${cur.length ? cur.map(o => buildOpRow(o)).join('') :
+            ${cur.length ? cur.map((o, i) => buildOpRow(o, i + 1)).join('') :
               '<tr><td colspan="10" class="table-empty"><div class="table-empty-icon">⟳</div>No operations found. Accept recommendations to create operations.</td></tr>'}
           </tbody>
         </table>
@@ -843,7 +843,7 @@ async function renderOperations() {
     </div>`;
 }
 
-function buildOpRow(o) {
+function buildOpRow(o, index) {
   let nextStatus = 'in_transit';
   let nextLabel = '→ In Transit';
   if (o.status === 'planned') {
@@ -860,7 +860,7 @@ function buildOpRow(o) {
   const opLabel = { transfer: 'Transfer', purchase_order: 'Purchase Order', discount_event: 'Discount', hold_note: 'Hold Note' };
 
   return `<tr>
-    <td class="font-mono" style="color:var(--text-muted)">#${o.id}</td>
+    <td class="font-mono" style="color:var(--text-muted)">#${index}</td>
     <td>${badge('badge-'+o.op_type, opLabel[o.op_type] || o.op_type)}</td>
     <td><strong>${o.product_name || '—'}</strong><br><span style="font-size:11px;color:var(--text-muted)">${o.category||''}</span></td>
     <td style="font-size:12px">${o.from_warehouse_name ? o.from_warehouse_name+'<br><span style="color:var(--text-muted)">'+o.from_city+'</span>' : '—'}</td>
